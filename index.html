@@ -31,7 +31,7 @@
       <h1>2028 대입 지도서 (다온)</h1>
       <span class="nav-sub">첨부파일</span>
     </div>
-    <p class="nav-hint" id="nav-hint">올린 파일은 누구나 내려받을 수 있습니다</p>
+    <p class="nav-hint" id="nav-hint">빠른 피드백과 신속한 작업을 위해서 만들었습니당~!</p>
   </header>
 
   <div class="progress is-hidden" id="progress"><i id="progress-bar"></i></div>
@@ -78,13 +78,25 @@
           <input class="search" id="search" type="search" placeholder="파일 이름 찾기" />
         </div>
         <div class="files-wrap" id="files-wrap"></div>
+        <div class="preview" id="preview">
+          <div class="preview-bar">
+            <span class="preview-name" id="preview-name">파일을 누르면 아래에서 미리봅니다</span>
+            <div class="preview-nav is-hidden" id="preview-nav">
+              <button type="button" class="preview-btn" id="preview-prev" aria-label="이전 슬라이드">이전</button>
+              <span class="preview-page" id="preview-page">1 / 1</span>
+              <button type="button" class="preview-btn" id="preview-next" aria-label="다음 슬라이드">다음</button>
+            </div>
+          </div>
+          <div class="preview-body" id="preview-body">
+            <div class="preview-empty">파일을 누르면 이 칸에서 넓게 미리봅니다</div>
+          </div>
+        </div>
       </section>
 
       <section class="pane pane-sheet is-hidden" id="pane-sheet">
         <div class="files-head">
           <div>
             <h2 id="sheet-title">메모장(자유롭게)</h2>
-            <p class="files-meta">Enter 아래 칸 · Shift+Enter 줄바꿈 · Ctrl+Z 실행 취소 · 누구나 이어서 쓸 수 있습니다</p>
           </div>
           <span class="sheet-addr" id="sheet-addr">A1</span>
         </div>

@@ -48,18 +48,27 @@ function createLocalStore({ dataDir, uploadDir, metaPath }) {
 
     async putFile(_stored, _srcPath) {},
 
-    async deleteFile(stored) {
+    localPath(stored) {
       const abs = path.resolve(uploadDir, path.basename(String(stored || "")));
       const root = path.resolve(uploadDir);
-      if (abs !== root && !abs.startsWith(root + path.sep)) return;
-      fs.unlink(abs, () => {});
+      if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+      return abs;
+    },
+
+    async deleteFile(stored) {
+      const abs = this.localPath(stored);
+      if (abs) fs.unlink(abs, () => {});
+    },
+
+    async readFile(stored) {
+      const abs = this.localPath(stored);
+      if (!abs || !fs.existsSync(abs)) return null;
+      return fs.readFileSync(abs);
     },
 
     sendFile(res, stored, downloadName) {
-      const abs = path.resolve(uploadDir, path.basename(String(stored || "")));
-      const root = path.resolve(uploadDir);
-      if (abs !== root && !abs.startsWith(root + path.sep)) return false;
-      if (!fs.existsSync(abs)) return false;
+      const abs = this.localPath(stored);
+      if (!abs || !fs.existsSync(abs)) return false;
       res.download(abs, downloadName);
       return true;
     },
@@ -208,7 +217,7 @@ function createGithubStore({ token, repo: repoRaw, branch }) {
       });
     },
 
-    async sendFile(res, stored, downloadName) {
+    async readFile(stored) {
       await ensureBranch();
       const apiRes = await api(
         "GET",
@@ -216,8 +225,13 @@ function createGithubStore({ token, repo: repoRaw, branch }) {
         null,
         { Accept: "application/vnd.github.raw" }
       );
-      if (!apiRes.ok) return false;
-      const buf = Buffer.from(await apiRes.arrayBuffer());
+      if (!apiRes.ok) return null;
+      return Buffer.from(await apiRes.arrayBuffer());
+    },
+
+    async sendFile(res, stored, downloadName) {
+      const buf = await this.readFile(stored);
+      if (!buf) return false;
       res.setHeader("Cache-Control", "private, max-age=120");
       res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Content-Length", String(buf.length));

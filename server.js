@@ -9,6 +9,7 @@ const express = require("express");
 const compression = require("compression");
 const multer = require("multer");
 const { createStore } = require("./store");
+const { previewKind, previewMime, buildSlides } = require("./preview");
 
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
 const START_PORT = Number(process.env.PORT) || 3080;
@@ -167,6 +168,7 @@ app.use((req, res, next) => {
     p.startsWith("/uploads") ||
     p === "/server.js" ||
     p === "/store.js" ||
+    p === "/preview.js" ||
     p.startsWith("/package") ||
     p.endsWith(".bat") ||
     p.endsWith(".json") ||
@@ -363,6 +365,58 @@ app.post("/api/upload", (req, res) => {
 
     res.json({ ok: true, files: added, counts: counts() });
   });
+});
+
+app.get("/api/preview/:id", async (req, res) => {
+  const row = findFile(String(req.params.id || ""));
+  if (!row) {
+    res.status(404).json({ error: "파일을 찾을 수 없습니다." });
+    return;
+  }
+  const kind = previewKind(row.ext);
+  if (kind !== "pdf" && kind !== "text") {
+    res.status(400).json({ error: "이 파일은 바로 미리볼 수 없습니다." });
+    return;
+  }
+  try {
+    const buf = await store.readFile(row.stored);
+    if (!buf) {
+      res.status(404).json({ error: "파일이 디스크에 없습니다." });
+      return;
+    }
+    res.setHeader("Cache-Control", "private, max-age=120");
+    res.setHeader("Content-Type", previewMime(row.ext));
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.end(buf);
+  } catch (_) {
+    res.status(404).json({ error: "파일이 디스크에 없습니다." });
+  }
+});
+
+app.get("/api/slides/:id", async (req, res) => {
+  const row = findFile(String(req.params.id || ""));
+  if (!row) {
+    res.status(404).json({ error: "파일을 찾을 수 없습니다." });
+    return;
+  }
+  const kind = previewKind(row.ext);
+  if (kind !== "slides" && kind !== "hwpx") {
+    res.status(400).json({ error: "슬라이드 미리보기를 지원하지 않는 형식입니다." });
+    return;
+  }
+  try {
+    const buf = await store.readFile(row.stored);
+    if (!buf) {
+      res.status(404).json({ error: "파일이 디스크에 없습니다." });
+      return;
+    }
+    const slides = await buildSlides(row.ext, buf);
+    res.setHeader("Cache-Control", "private, max-age=120");
+    res.json({ ok: true, name: row.name, slides });
+  } catch (_) {
+    res.status(500).json({ error: "미리보기를 만들지 못했습니다." });
+  }
 });
 
 app.get("/api/download/:id", async (req, res) => {

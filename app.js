@@ -9,6 +9,13 @@
   const filesTitle = $("files-title");
   const filesMeta = $("files-meta");
   const filesWrap = $("files-wrap");
+  const preview = $("preview");
+  const previewName = $("preview-name");
+  const previewNav = $("preview-nav");
+  const previewPage = $("preview-page");
+  const previewBody = $("preview-body");
+  const previewPrev = $("preview-prev");
+  const previewNext = $("preview-next");
   const paneSheet = $("pane-sheet");
   const sheetEl = $("sheet");
   const sheetScroll = $("sheet-scroll");
@@ -64,6 +71,11 @@
   let shownFiles = [];
   let toastTimer = 0;
   let uploading = false;
+  let selectedId = "";
+  let slideIndex = 0;
+  let currentSlides = [];
+  let previewToken = 0;
+  const slideCache = new Map();
 
   const extOf = (name) => {
     const i = name.lastIndexOf(".");
@@ -372,6 +384,130 @@
     sheetFiles.replaceChildren(frag);
   };
 
+  const paintSelected = () => {
+    for (const row of filesWrap.querySelectorAll("[data-file]")) {
+      row.classList.toggle("is-sel", row.dataset.file === selectedId);
+    }
+  };
+
+  const setPreviewEmpty = (msg) => {
+    previewNav.classList.add("is-hidden");
+    previewName.textContent = "파일을 누르면 아래에서 미리봅니다";
+    previewBody.innerHTML = `<div class="preview-empty">${msg}</div>`;
+  };
+
+  const showFallback = (file, msg) => {
+    previewNav.classList.add("is-hidden");
+    previewName.textContent = file.name;
+    previewBody.innerHTML = `<div class="preview-fallback">${msg}<br />오른쪽 내려받기로 열어 주세요.</div>`;
+  };
+
+  const renderSlide = () => {
+    const slide = currentSlides[slideIndex] || { texts: [], images: [] };
+    const texts = slide.texts || [];
+    const images = slide.images || [];
+    const title = texts[0] || "";
+    const rest = texts.slice(1);
+    previewPage.textContent = `${slideIndex + 1} / ${currentSlides.length || 1}`;
+    previewBody.innerHTML =
+      `<div class="preview-stage">` +
+      `<button type="button" class="preview-arrow prev" id="preview-arrow-prev" aria-label="이전">‹</button>` +
+      `<article class="preview-slide"></article>` +
+      `<button type="button" class="preview-arrow next" id="preview-arrow-next" aria-label="다음">›</button>` +
+      `</div>`;
+    const card = previewBody.querySelector(".preview-slide");
+    if (title) {
+      const h = document.createElement("h3");
+      h.textContent = title;
+      card.appendChild(h);
+    }
+    for (const src of images) {
+      const img = document.createElement("img");
+      img.src = src;
+      img.alt = "";
+      card.appendChild(img);
+    }
+    for (const line of rest) {
+      const p = document.createElement("p");
+      p.textContent = line;
+      card.appendChild(p);
+    }
+    if (!title && !rest.length && !images.length) {
+      const p = document.createElement("p");
+      p.textContent = "이 슬라이드에서 글을 찾지 못했습니다.";
+      card.appendChild(p);
+    }
+  };
+
+  const moveSlide = (delta) => {
+    if (!currentSlides.length) return;
+    slideIndex = (slideIndex + delta + currentSlides.length) % currentSlides.length;
+    renderSlide();
+  };
+
+  const openPreview = async (file) => {
+    const token = ++previewToken;
+    if (!file) {
+      setPreviewEmpty("파일을 누르면 이 칸에서 넓게 미리봅니다");
+      return;
+    }
+    selectedId = file.id;
+    paintSelected();
+    previewName.textContent = file.name;
+    previewNav.classList.add("is-hidden");
+    currentSlides = [];
+    slideIndex = 0;
+    const ext = file.ext;
+    const alive = () => token === previewToken;
+    if (ext === "pdf") {
+      previewBody.innerHTML = `<iframe class="preview-frame" src="api/preview/${encodeURIComponent(file.id)}#toolbar=1" title="미리보기"></iframe>`;
+      return;
+    }
+    if (ext === "txt" || ext === "text") {
+      previewBody.innerHTML = `<div class="preview-empty">불러오는 중…</div>`;
+      try {
+        const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        const text = await res.text();
+        if (!alive()) return;
+        previewBody.innerHTML = `<pre class="preview-text"></pre>`;
+        previewBody.querySelector("pre").textContent = text;
+      } catch (_) {
+        if (alive()) showFallback(file, "텍스트를 불러오지 못했습니다.");
+      }
+      return;
+    }
+    if (ext === "pptx" || ext === "ppsx" || ext === "potx" || ext === "hwpx") {
+      previewBody.innerHTML = `<div class="preview-empty">미리보기를 만드는 중…</div>`;
+      try {
+        let data = slideCache.get(file.id);
+        if (!data) {
+          const res = await fetch("api/slides/" + encodeURIComponent(file.id), { cache: "no-store" });
+          data = await res.json();
+          if (!res.ok) throw new Error(data.error || "");
+          slideCache.set(file.id, data);
+        }
+        if (!alive()) return;
+        currentSlides = data.slides || [];
+        if (!currentSlides.length) {
+          showFallback(file, "이 파일에서 미리볼 내용을 찾지 못했습니다.");
+          return;
+        }
+        previewNav.classList.toggle("is-hidden", currentSlides.length < 2);
+        renderSlide();
+      } catch (_) {
+        if (alive()) showFallback(file, "미리보기를 만들지 못했습니다.");
+      }
+      return;
+    }
+    const label = ext === "ppt" || ext === "pps" || ext === "pot"
+      ? "구버전 PowerPoint(ppt)는 브라우저 미리보기를 지원하지 않습니다."
+      : ext === "hwp"
+        ? "한글(hwp) 파일은 브라우저에서 미리볼 수 없습니다."
+        : "이 형식은 브라우저 미리보기를 지원하지 않습니다.";
+    showFallback(file, label);
+  };
+
   const renderFiles = (menuId, files) => {
     shownFiles = files;
     const menu = menus.find((m) => m.id === menuId);
@@ -384,11 +520,13 @@
     const visible = q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
     filesTitle.textContent = menu ? menu.label : "";
     filesMeta.textContent = files.length
-      ? `${files.length}개 파일 · 누구나 내려받을 수 있습니다`
+      ? `${files.length}개 파일 · 클릭하면 아래에서 미리봅니다`
       : "아직 올라온 파일이 없습니다";
 
     if (!visible.length) {
       filesWrap.innerHTML = `<div class="empty">${files.length ? "찾는 파일이 없습니다." : "이 메뉴에는 첨부파일이 없습니다.<br />왼쪽에서 업로드를 눌러 파일을 올려 주세요."}</div>`;
+      selectedId = "";
+      setPreviewEmpty(files.length ? "찾는 파일이 없습니다." : "이 메뉴에는 아직 파일이 없습니다");
       return;
     }
 
@@ -396,6 +534,7 @@
     for (const f of visible) {
       const row = document.createElement("article");
       row.className = "file-row";
+      row.dataset.file = f.id;
       row.innerHTML =
         fileBadge(f.ext) +
         `<div><div class="file-name"></div><div class="file-sub">${formatSize(f.size)}</div></div>` +
@@ -406,6 +545,8 @@
       frag.appendChild(row);
     }
     filesWrap.replaceChildren(frag);
+    const keep = visible.find((f) => f.id === selectedId) || visible[0];
+    openPreview(keep);
   };
 
   const loadFiles = async (menuId, force) => {
@@ -522,8 +663,10 @@
       const data = await postUpload(menuId, files);
       counts = data.counts;
       cache.delete(menuId);
+      for (const f of data.files || []) slideCache.delete(f.id);
       renderMenus();
       toast(`${files.length}개 파일을 올렸습니다`);
+      if (data.files && data.files[0]) selectedId = data.files[0].id;
       await openMenu(menuId, true);
     } catch (e) {
       toast(e.message);
@@ -549,6 +692,8 @@
       if (!res.ok) throw new Error(data.error || "삭제 실패");
       counts = data.counts;
       cache.delete(view);
+      slideCache.delete(id);
+      if (selectedId === id) selectedId = "";
       renderMenus();
       await openMenu(view, true);
       toast("삭제했습니다");
@@ -636,8 +781,24 @@
     const btn = e.target.closest("[data-del]");
     if (btn) deleteFile(btn.dataset.del);
   };
-  filesWrap.addEventListener("click", onFileDel);
+  filesWrap.addEventListener("click", (e) => {
+    if (e.target.closest("[data-del]")) {
+      onFileDel(e);
+      return;
+    }
+    if (e.target.closest(".btn-dl")) return;
+    const row = e.target.closest("[data-file]");
+    if (!row) return;
+    const file = shownFiles.find((f) => f.id === row.dataset.file);
+    if (file) openPreview(file);
+  });
   sheetFiles.addEventListener("click", onFileDel);
+  previewBody.addEventListener("click", (e) => {
+    if (e.target.closest("#preview-arrow-prev")) moveSlide(-1);
+    if (e.target.closest("#preview-arrow-next")) moveSlide(1);
+  });
+  previewPrev.addEventListener("click", () => moveSlide(-1));
+  previewNext.addEventListener("click", () => moveSlide(1));
 
   btnUpload.addEventListener("click", () => setView("upload"));
   $("btn-pick").addEventListener("click", () => fileInput.click());
@@ -659,6 +820,10 @@
         return;
       }
       closeModal();
+    }
+    if (view !== "memo" && view !== "upload" && currentSlides.length && modal.classList.contains("is-hidden")) {
+      if (e.key === "ArrowLeft") { e.preventDefault(); moveSlide(-1); return; }
+      if (e.key === "ArrowRight") { e.preventDefault(); moveSlide(1); return; }
     }
     if (view !== "memo" || modal.classList.contains("is-hidden") === false) return;
     if (e.target.closest(".menu-edit") || e.target === search) return;
