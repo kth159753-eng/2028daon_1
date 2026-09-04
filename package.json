@@ -1,0 +1,18 @@
+{
+  "name": "daon-writing-files",
+  "version": "1.0.0",
+  "private": true,
+  "description": "2028 대입 지도서 집필 첨부파일 대시보드",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "compression": "^1.8.0",
+    "express": "^5.1.0",
+    "multer": "^2.0.1"
+  }
+}

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>2028 대입 지도서 (다온) · 첨부파일</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231a73e8'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="offline" class="offline is-hidden">
+    <div class="offline-card">
+      <h2 id="offline-title">연결할 수 없습니다</h2>
+      <p id="offline-body">서버가 응답하지 않습니다. 잠시 후 새로고침해 주세요.</p>
+    </div>
+  </div>
+
+  <div id="login" class="offline is-hidden">
+    <form class="offline-card" id="login-form">
+      <h2>비밀번호를 입력하세요</h2>
+      <p>배포된 사이트는 비밀번호가 있어야 사용할 수 있습니다.</p>
+      <input class="login-input" id="login-pass" type="password" autocomplete="current-password" placeholder="비밀번호" />
+      <button type="submit" class="btn-pick" id="login-btn">들어가기</button>
+      <p class="login-err is-hidden" id="login-err">비밀번호가 올바르지 않습니다.</p>
+    </form>
+  </div>
+
+  <header class="nav">
+    <div class="nav-left">
+      <span class="nav-mark" aria-hidden="true"></span>
+      <h1>2028 대입 지도서 (다온)</h1>
+      <span class="nav-sub">첨부파일</span>
+    </div>
+    <p class="nav-hint" id="nav-hint">올린 파일은 누구나 내려받을 수 있습니다</p>
+  </header>
+
+  <div class="progress is-hidden" id="progress"><i id="progress-bar"></i></div>
+
+  <div class="shell">
+    <aside class="side" aria-label="문서 탭">
+      <div class="side-head">문서 탭 <span class="side-hint">더블클릭하면 제목 변경</span></div>
+      <nav class="side-nav">
+        <button type="button" class="menu-item upload-item is-active" id="btn-upload">
+          <span class="menu-ico" aria-hidden="true">
+            <svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M10 4.2a.8.8 0 0 1 .8.8v4.2h4.2a.8.8 0 1 1 0 1.6h-4.2v4.2a.8.8 0 1 1-1.6 0V10.8H5.8a.8.8 0 1 1 0-1.6h4.2V5a.8.8 0 0 1 .8-.8Z"/></svg>
+          </span>
+          <span class="menu-label">업로드</span>
+        </button>
+        <div class="side-list" id="menu-list"></div>
+      </nav>
+    </aside>
+
+    <main class="main" id="main">
+      <section class="pane" id="pane-upload">
+        <div class="drop" id="drop" tabindex="0">
+          <input id="file-input" type="file" multiple hidden accept=".ppt,.pptx,.pot,.potx,.pps,.ppsx,.hwp,.hwpx,.hwt,.hml,.hwpml,.owpml,.cell,.show,.nxl,.nxls,.txt,.text,.pdf" />
+          <div class="drop-inner">
+            <div class="drop-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 48" width="52" height="52" fill="none">
+                <path d="M24 10v18" stroke="#1a73e8" stroke-width="3.2" stroke-linecap="round"/>
+                <path d="M16.5 17.5 24 10l7.5 7.5" stroke="#1a73e8" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M12 32v4a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4v-4" stroke="#8ab4f8" stroke-width="3.2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <strong>파일을 여기로 끌어다 놓으세요</strong>
+            <p>ppt · pptx · pdf · hwp · hwpx · 메모장 · 한글오피스<br />같은 파일도 여러 번 올릴 수 있습니다</p>
+            <button type="button" class="btn-pick" id="btn-pick">파일 선택</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane is-hidden" id="pane-files">
+        <div class="files-head">
+          <div>
+            <h2 id="files-title"></h2>
+            <p class="files-meta" id="files-meta"></p>
+          </div>
+          <input class="search" id="search" type="search" placeholder="파일 이름 찾기" />
+        </div>
+        <div class="files-wrap" id="files-wrap"></div>
+      </section>
+
+      <section class="pane pane-sheet is-hidden" id="pane-sheet">
+        <div class="files-head">
+          <div>
+            <h2 id="sheet-title">메모장(자유롭게)</h2>
+            <p class="files-meta">Enter 아래 칸 · Shift+Enter 줄바꿈 · Ctrl+Z 실행 취소 · 누구나 이어서 쓸 수 있습니다</p>
+          </div>
+          <span class="sheet-addr" id="sheet-addr">A1</span>
+        </div>
+        <div class="sheet-scroll" id="sheet-scroll">
+          <table class="sheet" id="sheet"></table>
+          <textarea class="sheet-editor is-hidden" id="sheet-editor" spellcheck="false"></textarea>
+        </div>
+        <div class="sheet-files" id="sheet-files"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal is-hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-card">
+      <h3 id="modal-title">어느 메뉴로 올릴까요?</h3>
+      <p class="modal-sub" id="modal-sub"></p>
+      <div class="pending" id="pending-list"></div>
+      <div class="modal-menus" id="modal-menus"></div>
+      <button type="button" class="btn-ghost" id="modal-cancel">취소</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

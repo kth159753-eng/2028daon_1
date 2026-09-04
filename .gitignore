@@ -1,0 +1,10 @@
+node_modules/
+uploads/*
+!uploads/.gitkeep
+data/meta.json
+data/meta.json.tmp
+storage/
+.DS_Store
+Thumbs.db
+.env
+.env.*

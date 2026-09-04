@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: daon-2028
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NO_OPEN
+        value: "1"
+      - key: GITHUB_REPO
+        value: kth159753-eng/2028daon_1
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: TEAM_PASSWORD
+        sync: false
