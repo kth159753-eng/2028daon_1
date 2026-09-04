@@ -8,6 +8,7 @@ const path = require("path");
 const express = require("express");
 const compression = require("compression");
 const multer = require("multer");
+const JSZip = require("jszip");
 const { createStore } = require("./store");
 
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
@@ -233,7 +234,61 @@ function normalizeSheet(raw) {
       cells[key] = text.slice(0, 20000);
     }
   }
-  return { rows, cols, cells };
+  const styles = {};
+  if (src.styles && typeof src.styles === "object" && !Array.isArray(src.styles)) {
+    for (const [key, value] of Object.entries(src.styles)) {
+      if (!/^\d+,\d+$/.test(key) || !value || typeof value !== "object") continue;
+      const next = {};
+      if (value.bold) next.bold = true;
+      if (value.underline) next.underline = true;
+      if (value.color === "red" || value.color === "blue" || value.color === "green") next.color = value.color;
+      if (next.bold || next.underline || next.color) styles[key] = next;
+    }
+  }
+  const used = new Set();
+  const merges = [];
+  const list = Array.isArray(src.merges) ? src.merges : [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    let r1 = Math.round(Number(item.r1));
+    let c1 = Math.round(Number(item.c1));
+    let r2 = Math.round(Number(item.r2));
+    let c2 = Math.round(Number(item.c2));
+    if (![r1, c1, r2, c2].every(Number.isFinite)) continue;
+    if (r1 > r2) [r1, r2] = [r2, r1];
+    if (c1 > c2) [c1, c2] = [c2, c1];
+    r1 = Math.max(0, Math.min(rows - 1, r1));
+    r2 = Math.max(0, Math.min(rows - 1, r2));
+    c1 = Math.max(0, Math.min(cols - 1, c1));
+    c2 = Math.max(0, Math.min(cols - 1, c2));
+    if (r1 === r2 && c1 === c2) continue;
+    let ok = true;
+    const keys = [];
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const key = r + "," + c;
+        if (used.has(key)) { ok = false; break; }
+        keys.push(key);
+      }
+      if (!ok) break;
+    }
+    if (!ok) continue;
+    keys.forEach((key) => used.add(key));
+    merges.push({ r1, c1, r2, c2 });
+  }
+  const colW = [];
+  const rowH = [];
+  const srcW = Array.isArray(src.colW) ? src.colW : [];
+  const srcH = Array.isArray(src.rowH) ? src.rowH : [];
+  for (let i = 0; i < cols; i++) {
+    const n = Math.round(Number(srcW[i]));
+    colW.push(Number.isFinite(n) ? Math.min(640, Math.max(48, n)) : 128);
+  }
+  for (let i = 0; i < rows; i++) {
+    const n = Math.round(Number(srcH[i]));
+    rowH.push(!Number.isFinite(n) || n <= 0 ? 0 : Math.min(400, Math.max(22, n)));
+  }
+  return { rows, cols, cells, styles, merges, colW, rowH };
 }
 
 function normalizeEvents(raw) {
@@ -506,6 +561,83 @@ app.post("/api/upload", (req, res) => {
 
     res.json({ ok: true, files: added, ...fileStats() });
   });
+});
+
+function zipSafe(name) {
+  return String(name || "이름")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\.+/g, ".")
+    .replace(/^\.+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "이름";
+}
+
+function uniqueZipName(used, name, asFile) {
+  const i = asFile ? name.lastIndexOf(".") : -1;
+  const base = i > 0 ? name.slice(0, i) : name;
+  const ext = i > 0 ? name.slice(i) : "";
+  let out = name;
+  let n = 2;
+  while (used.has(out)) {
+    out = `${base} (${n})${ext}`;
+    n += 1;
+  }
+  used.add(out);
+  return out;
+}
+
+app.post("/api/zip", async (req, res) => {
+  const raw = Array.isArray(req.body && req.body.menuIds) ? req.body.menuIds : [];
+  const ids = [...new Set(raw.map((id) => String(id || "")).filter((id) => MENU_IDS.has(id)))];
+  if (!ids.length) {
+    res.status(400).json({ error: "메뉴를 선택해 주세요." });
+    return;
+  }
+  const wanted = new Set(ids);
+  const files = meta.files.filter((f) => wanted.has(f.menuId));
+  if (!files.length) {
+    res.status(400).json({ error: "선택한 메뉴에 파일이 없습니다." });
+    return;
+  }
+  const labels = Object.fromEntries(publicMenus().map((m) => [m.id, m.label]));
+  const zip = new JSZip();
+  const folders = new Map();
+  const folderUsed = new Set();
+  for (const id of ids) {
+    folders.set(id, uniqueZipName(folderUsed, zipSafe(labels[id] || id), false));
+  }
+  const usedIn = new Map();
+  let added = 0;
+  for (const row of files) {
+    const buf = await store.readFile(row.stored);
+    if (!buf) continue;
+    const folder = folders.get(row.menuId);
+    if (!usedIn.has(folder)) usedIn.set(folder, new Set());
+    const name = uniqueZipName(usedIn.get(folder), zipSafe(row.name), true);
+    zip.file(`${folder}/${name}`, buf);
+    added += 1;
+  }
+  if (!added) {
+    res.status(404).json({ error: "받을 수 있는 파일이 없습니다." });
+    return;
+  }
+  try {
+    const buf = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+      compressionOptions: { level: 5 },
+    });
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+    const fname = `제출파일_${stamp}.zip`;
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="files.zip"; filename*=UTF-8''${encodeURIComponent(fname)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.end(buf);
+  } catch (_) {
+    res.status(500).json({ error: "압축 파일을 만들지 못했습니다." });
+  }
 });
 
 app.get("/api/download/:id", async (req, res) => {

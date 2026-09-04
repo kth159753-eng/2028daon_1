@@ -18,6 +18,8 @@
   const sheetFiles = $("sheet-files");
   const statusRows = $("status-rows");
   const statusSum = $("status-sum");
+  const statusAll = $("status-all");
+  const btnZip = $("btn-zip");
   const drop = $("drop");
   const fileInput = $("file-input");
   const modal = $("modal");
@@ -105,6 +107,7 @@
 
   const newestFirst = (files) => files.slice().sort((a, b) => String(b.uploadedAt || "").localeCompare(String(a.uploadedAt || "")));
   const STATUS_SKIP = new Set(["memo", "merged", "refs"]);
+  const selectedMenus = new Set();
   const formatStatusWhen = (iso) => {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "아직 없음";
@@ -239,9 +242,14 @@
     rows: 40,
     cols: 10,
     cells: {},
+    styles: {},
+    merges: [],
+    colW: [],
+    rowH: [],
     sel: { r: 0, c: 0 },
     anchor: { r: 0, c: 0 },
     dragging: false,
+    sizing: null,
     editing: false,
     editFrom: "",
     undo: [],
@@ -252,9 +260,45 @@
     key(r, c) { return cellKey(r, c); },
     get(r, c) { return this.cells[this.key(r, c)] || ""; },
     addr(r, c) { return colName(c) + (r + 1); },
+    styleOf(r, c) { return this.styles[this.key(r, c)] || {}; },
+
+    mergeAt(r, c) {
+      return this.merges.find((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2) || null;
+    },
+
+    origin(r, c) {
+      const m = this.mergeAt(r, c);
+      return m ? { r: m.r1, c: m.c1 } : { r, c };
+    },
+
+    isCovered(r, c) {
+      const m = this.mergeAt(r, c);
+      return Boolean(m && (m.r1 !== r || m.c1 !== c));
+    },
+
+    overlaps(a, b) {
+      return !(a.r2 < b.r1 || a.r1 > b.r2 || a.c2 < b.c1 || a.c1 > b.c2);
+    },
+
+    expandRange(box) {
+      let { r1, c1, r2, c2 } = box;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const m of this.merges) {
+          if (m.r2 < r1 || m.r1 > r2 || m.c2 < c1 || m.c1 > c2) continue;
+          if (m.r1 < r1) { r1 = m.r1; changed = true; }
+          if (m.c1 < c1) { c1 = m.c1; changed = true; }
+          if (m.r2 > r2) { r2 = m.r2; changed = true; }
+          if (m.c2 > c2) { c2 = m.c2; changed = true; }
+        }
+      }
+      return { r1, c1, r2, c2 };
+    },
 
     td(r, c) {
-      return sheetEl.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      const o = this.origin(r, c);
+      return sheetEl.querySelector(`td[data-r="${o.r}"][data-c="${o.c}"]`);
     },
 
     clamp(r, c) {
@@ -273,6 +317,47 @@
       };
     },
 
+    paintTd(td, r, c) {
+      if (!td) return;
+      if (!this.editing || this.sel.r !== r || this.sel.c !== c) td.textContent = this.get(r, c);
+      const s = this.styleOf(r, c);
+      td.classList.toggle("is-bold", !!s.bold);
+      td.classList.toggle("is-under", !!s.underline);
+      td.classList.toggle("c-red", s.color === "red");
+      td.classList.toggle("c-blue", s.color === "blue");
+      td.classList.toggle("c-green", s.color === "green");
+    },
+
+    paintEditor() {
+      const s = this.styleOf(this.sel.r, this.sel.c);
+      sheetEditor.classList.toggle("is-bold", !!s.bold);
+      sheetEditor.classList.toggle("is-under", !!s.underline);
+      sheetEditor.classList.toggle("c-red", s.color === "red");
+      sheetEditor.classList.toggle("c-blue", s.color === "blue");
+      sheetEditor.classList.toggle("c-green", s.color === "green");
+    },
+
+    syncFmt() {
+      const tools = $("sheet-tools");
+      if (!tools) return;
+      const box = this.range();
+      const s = this.styleOf(this.sel.r, this.sel.c);
+      const single = box.r1 === box.r2 && box.c1 === box.c2;
+      const already = this.merges.some((m) => m.r1 === box.r1 && m.c1 === box.c1 && m.r2 === box.r2 && m.c2 === box.c2);
+      const mergeBtn = tools.querySelector("[data-sheet=merge]");
+      const splitBtn = tools.querySelector("[data-sheet=split]");
+      if (mergeBtn) mergeBtn.disabled = single || already;
+      if (splitBtn) splitBtn.disabled = !this.merges.some((m) => this.overlaps(m, box));
+      for (const btn of tools.querySelectorAll("[data-sheet]")) {
+        const kind = btn.dataset.sheet;
+        btn.classList.toggle("is-on",
+          kind === "bold" ? !!s.bold
+            : kind === "under" ? !!s.underline
+              : kind === "red" || kind === "blue" || kind === "green" ? s.color === kind
+                : false);
+      }
+    },
+
     paintSel() {
       sheetEl.querySelectorAll("td.is-sel, td.is-range").forEach((el) => {
         el.classList.remove("is-sel", "is-range");
@@ -289,15 +374,104 @@
       sheetAddr.textContent = r1 === r2 && c1 === c2
         ? this.addr(r1, c1)
         : this.addr(r1, c1) + ":" + this.addr(r2, c2);
+      this.syncFmt();
+    },
+
+    ensureSizes() {
+      while (this.colW.length < this.cols) this.colW.push(128);
+      while (this.rowH.length < this.rows) this.rowH.push(0);
+      if (this.colW.length > this.cols) this.colW.length = this.cols;
+      if (this.rowH.length > this.rows) this.rowH.length = this.rows;
+    },
+
+    tableWidth() {
+      return 38 + this.colW.reduce((sum, w) => sum + w, 0);
+    },
+
+    applyColW(i, w) {
+      this.colW[i] = Math.min(640, Math.max(48, Math.round(w)));
+      const col = sheetEl.querySelector(`col[data-c="${i}"]`);
+      if (col) col.style.width = this.colW[i] + "px";
+      const th = sheetEl.querySelector(`thead th[data-c="${i}"]`);
+      if (th) th.style.width = this.colW[i] + "px";
+      sheetEl.style.width = this.tableWidth() + "px";
+    },
+
+    applyRowH(i, h) {
+      this.rowH[i] = Math.min(400, Math.max(22, Math.round(h)));
+      const tr = sheetEl.querySelector(`tr[data-r="${i}"]`);
+      if (tr) tr.style.height = this.rowH[i] + "px";
+    },
+
+    startSize(kind, index, e) {
+      if (this.editing) this.commit(0, 0);
+      this.dragging = false;
+      let startSize = kind === "col" ? this.colW[index] : this.rowH[index];
+      if (kind === "row" && !startSize) {
+        const tr = sheetEl.querySelector(`tr[data-r="${index}"]`);
+        startSize = tr ? tr.offsetHeight : 28;
+      }
+      this.sizing = {
+        kind,
+        index,
+        start: kind === "col" ? e.clientX : e.clientY,
+        startSize,
+        snapped: false,
+      };
+      document.body.classList.add(kind === "col" ? "is-col-sizing" : "is-row-sizing");
+    },
+
+    moveSize(e) {
+      if (!this.sizing) return;
+      const { kind, index, start, startSize } = this.sizing;
+      const now = kind === "col" ? e.clientX : e.clientY;
+      const next = startSize + (now - start);
+      if (!this.sizing.snapped && Math.abs(now - start) < 2) return;
+      if (!this.sizing.snapped) {
+        this.pushSnap();
+        this.sizing.snapped = true;
+      }
+      if (kind === "col") this.applyColW(index, next);
+      else this.applyRowH(index, next);
+    },
+
+    endSize() {
+      if (!this.sizing) return;
+      if (this.sizing.snapped) this.scheduleSave();
+      this.sizing = null;
+      document.body.classList.remove("is-col-sizing", "is-row-sizing");
+      if (this.editing) this.placeEditor(this.td(this.sel.r, this.sel.c));
     },
 
     render() {
+      this.ensureSizes();
+      const x = sheetScroll ? sheetScroll.scrollLeft : 0;
+      const y = sheetScroll ? sheetScroll.scrollTop : 0;
+      const group = document.createElement("colgroup");
+      const rhCol = document.createElement("col");
+      rhCol.style.width = "38px";
+      group.appendChild(rhCol);
+      for (let c = 0; c < this.cols; c++) {
+        const col = document.createElement("col");
+        col.dataset.c = String(c);
+        col.style.width = this.colW[c] + "px";
+        group.appendChild(col);
+      }
+
       const head = document.createElement("thead");
       const hr = document.createElement("tr");
       hr.appendChild(Object.assign(document.createElement("th"), { className: "rh" }));
       for (let c = 0; c < this.cols; c++) {
         const th = document.createElement("th");
-        th.textContent = colName(c);
+        th.dataset.c = String(c);
+        th.style.width = this.colW[c] + "px";
+        th.appendChild(document.createTextNode(colName(c)));
+        const grip = document.createElement("i");
+        grip.className = "sheet-grip col";
+        grip.dataset.resize = "col";
+        grip.dataset.i = String(c);
+        grip.title = "드래그해서 열 너비 조절";
+        th.appendChild(grip);
         hr.appendChild(th);
       }
       head.appendChild(hr);
@@ -305,21 +479,42 @@
       const body = document.createElement("tbody");
       for (let r = 0; r < this.rows; r++) {
         const tr = document.createElement("tr");
+        tr.dataset.r = String(r);
+        if (this.rowH[r]) tr.style.height = this.rowH[r] + "px";
         const rh = document.createElement("th");
         rh.className = "rh";
         rh.textContent = String(r + 1);
+        const rgrip = document.createElement("i");
+        rgrip.className = "sheet-grip row";
+        rgrip.dataset.resize = "row";
+        rgrip.dataset.i = String(r);
+        rgrip.title = "드래그해서 행 높이 조절";
+        rh.appendChild(rgrip);
         tr.appendChild(rh);
         for (let c = 0; c < this.cols; c++) {
+          if (this.isCovered(r, c)) continue;
           const td = document.createElement("td");
           td.dataset.r = String(r);
           td.dataset.c = String(c);
-          td.textContent = this.get(r, c);
+          const m = this.mergeAt(r, c);
+          if (m && m.r1 === r && m.c1 === c) {
+            const rs = m.r2 - m.r1 + 1;
+            const cs = m.c2 - m.c1 + 1;
+            if (rs > 1) td.rowSpan = rs;
+            if (cs > 1) td.colSpan = cs;
+          }
+          this.paintTd(td, r, c);
           tr.appendChild(td);
         }
         body.appendChild(tr);
       }
-      sheetEl.replaceChildren(head, body);
+      sheetEl.replaceChildren(group, head, body);
+      sheetEl.style.width = this.tableWidth() + "px";
       this.paintSel();
+      if (sheetScroll) {
+        sheetScroll.scrollLeft = x;
+        sheetScroll.scrollTop = y;
+      }
     },
 
     grow(r, c) {
@@ -332,7 +527,10 @@
         this.cols = Math.min(40, this.cols + 3);
         changed = true;
       }
-      if (changed) this.render();
+      if (changed) {
+        this.ensureSizes();
+        this.render();
+      }
     },
 
     scheduleSave() {
@@ -345,28 +543,70 @@
         await fetch("api/sheet", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows: this.rows, cols: this.cols, cells: this.cells }),
+          body: JSON.stringify({
+            rows: this.rows,
+            cols: this.cols,
+            cells: this.cells,
+            styles: this.styles,
+            merges: this.merges,
+            colW: this.colW,
+            rowH: this.rowH,
+          }),
         });
       } catch (_) {}
     },
 
+    snapshot() {
+      return {
+        type: "snap",
+        cells: { ...this.cells },
+        styles: JSON.parse(JSON.stringify(this.styles)),
+        merges: this.merges.map((m) => ({ ...m })),
+        colW: this.colW.slice(),
+        rowH: this.rowH.slice(),
+        sel: { ...this.sel },
+        anchor: { ...this.anchor },
+      };
+    },
+
+    restoreSnap(item) {
+      this.cells = { ...item.cells };
+      this.styles = JSON.parse(JSON.stringify(item.styles || {}));
+      this.merges = (item.merges || []).map((m) => ({ ...m }));
+      this.colW = Array.isArray(item.colW) ? item.colW.slice() : this.colW.slice();
+      this.rowH = Array.isArray(item.rowH) ? item.rowH.slice() : this.rowH.slice();
+      this.sel = { ...item.sel };
+      this.anchor = { ...item.anchor };
+      this.render();
+      this.scheduleSave();
+    },
+
+    pushSnap() {
+      this.undo.push(this.snapshot());
+      if (this.undo.length > 200) this.undo.shift();
+      this.redo.length = 0;
+    },
+
     write(r, c, next) {
-      if (next) this.cells[this.key(r, c)] = next;
-      else delete this.cells[this.key(r, c)];
-      const td = this.td(r, c);
-      if (td && !this.editing) td.textContent = next;
+      const o = this.origin(r, c);
+      const key = this.key(o.r, o.c);
+      if (next) this.cells[key] = next;
+      else delete this.cells[key];
+      const td = this.td(o.r, o.c);
+      if (td && !this.editing) this.paintTd(td, o.r, o.c);
     },
 
     apply(r, c, next, record) {
-      const prev = this.get(r, c);
+      const o = this.origin(r, c);
+      const prev = this.get(o.r, o.c);
       if (prev === next) return false;
-      this.write(r, c, next);
+      this.write(o.r, o.c, next);
       if (record) {
-        this.undo.push({ r, c, from: prev, to: next });
+        this.undo.push({ r: o.r, c: o.c, from: prev, to: next });
         if (this.undo.length > 200) this.undo.shift();
         this.redo.length = 0;
       }
-      this.grow(r, c);
+      this.grow(o.r, o.c);
       this.scheduleSave();
       return true;
     },
@@ -381,11 +621,17 @@
       }
       this.grow(maxR, maxC);
       const many = [];
+      const seen = new Set();
       for (const p of pairs) {
-        const from = this.get(p.r, p.c);
+        if (this.isCovered(p.r, p.c)) continue;
+        const o = this.origin(p.r, p.c);
+        const k = this.key(o.r, o.c);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const from = this.get(o.r, o.c);
         if (from === p.to) continue;
-        this.write(p.r, p.c, p.to);
-        many.push({ r: p.r, c: p.c, from, to: p.to });
+        this.write(o.r, o.c, p.to);
+        many.push({ r: o.r, c: o.c, from, to: p.to });
       }
       if (!many.length) return;
       this.undo.push({
@@ -408,6 +654,11 @@
     undoLast() {
       const item = this.undo.pop();
       if (!item) return;
+      if (item.type === "snap") {
+        this.redo.push(this.snapshot());
+        this.restoreSnap(item);
+        return;
+      }
       this.redo.push(item);
       if (item.many) {
         for (const ch of item.many) this.write(ch.r, ch.c, ch.from);
@@ -422,6 +673,11 @@
     redoLast() {
       const item = this.redo.pop();
       if (!item) return;
+      if (item.type === "snap") {
+        this.undo.push(this.snapshot());
+        this.restoreSnap(item);
+        return;
+      }
       this.undo.push(item);
       if (item.many) {
         for (const ch of item.many) this.write(ch.r, ch.c, ch.to);
@@ -486,6 +742,84 @@
       this.applyMany(pairs);
     },
 
+    eachOrigin(box, fn) {
+      for (let r = box.r1; r <= box.r2; r++) {
+        for (let c = box.c1; c <= box.c2; c++) {
+          if (this.isCovered(r, c)) continue;
+          fn(r, c);
+        }
+      }
+    },
+
+    setStyleKey(key, next) {
+      const clean = {};
+      if (next.bold) clean.bold = true;
+      if (next.underline) clean.underline = true;
+      if (next.color === "red" || next.color === "blue" || next.color === "green") clean.color = next.color;
+      if (clean.bold || clean.underline || clean.color) this.styles[key] = clean;
+      else delete this.styles[key];
+    },
+
+    toggleFmt(kind) {
+      const box = this.expandRange(this.range());
+      const keys = [];
+      this.eachOrigin(box, (r, c) => keys.push(this.key(r, c)));
+      if (!keys.length) return;
+      const color = kind === "red" || kind === "blue" || kind === "green" ? kind : "";
+      const allOn = keys.every((k) => {
+        const s = this.styles[k] || {};
+        if (color) return s.color === color;
+        if (kind === "bold") return !!s.bold;
+        return !!s.underline;
+      });
+      this.pushSnap();
+      for (const k of keys) {
+        const s = { ...(this.styles[k] || {}) };
+        if (color) {
+          if (allOn) delete s.color;
+          else s.color = color;
+        } else if (kind === "bold") {
+          if (allOn) delete s.bold;
+          else s.bold = true;
+        } else if (allOn) delete s.underline;
+        else s.underline = true;
+        this.setStyleKey(k, s);
+      }
+      sheetEl.querySelectorAll("td").forEach((td) => {
+        this.paintTd(td, Number(td.dataset.r), Number(td.dataset.c));
+      });
+      if (this.editing) this.paintEditor();
+      this.paintSel();
+      this.scheduleSave();
+    },
+
+    mergeRange() {
+      const box = this.expandRange(this.range());
+      if (box.r1 === box.r2 && box.c1 === box.c2) return;
+      this.pushSnap();
+      this.merges = this.merges.filter((m) => !this.overlaps(m, box));
+      this.eachOrigin(box, (r, c) => {
+        if (r === box.r1 && c === box.c1) return;
+        delete this.cells[this.key(r, c)];
+        delete this.styles[this.key(r, c)];
+      });
+      this.merges.push(box);
+      this.sel = { r: box.r1, c: box.c1 };
+      this.anchor = { r: box.r2, c: box.c2 };
+      this.render();
+      this.scheduleSave();
+    },
+
+    splitRange() {
+      const box = this.range();
+      const hit = this.merges.filter((m) => this.overlaps(m, box));
+      if (!hit.length) return;
+      this.pushSnap();
+      this.merges = this.merges.filter((m) => !this.overlaps(m, box));
+      this.render();
+      this.scheduleSave();
+    },
+
     placeEditor(td) {
       const left = td.offsetLeft;
       const top = td.offsetTop;
@@ -503,14 +837,16 @@
     },
 
     startEdit(selectAll) {
-      const { r, c } = this.sel;
-      const td = this.td(r, c);
+      const o = this.origin(this.sel.r, this.sel.c);
+      this.sel = { r: o.r, c: o.c };
+      const td = this.td(o.r, o.c);
       if (!td) return;
       this.editing = true;
-      this.editFrom = this.get(r, c);
+      this.editFrom = this.get(o.r, o.c);
       td.textContent = "";
       sheetEditor.value = this.editFrom;
       sheetEditor.classList.remove("is-hidden");
+      this.paintEditor();
       this.placeEditor(td);
       sheetEditor.focus();
       if (selectAll) sheetEditor.select();
@@ -526,8 +862,8 @@
       sheetEditor.classList.add("is-hidden");
       this.apply(r, c, next, true);
       const td = this.td(r, c);
-      if (td) td.textContent = this.get(r, c);
-      if (moveR || moveC) this.select(r + (moveR || 0), c + (moveC || 0));
+      this.paintTd(td, r, c);
+      if (moveR || moveC) this.move(moveR || 0, moveC || 0, false);
       else this.paintSel();
     },
 
@@ -536,7 +872,7 @@
       this.editing = false;
       sheetEditor.classList.add("is-hidden");
       const td = this.td(this.sel.r, this.sel.c);
-      if (td) td.textContent = this.editFrom;
+      this.paintTd(td, this.sel.r, this.sel.c);
     },
 
     blur() {
@@ -545,15 +881,44 @@
 
     select(r, c, extend) {
       const next = this.clamp(r, c);
-      this.sel.r = next.r;
-      this.sel.c = next.c;
       if (!extend) {
-        this.anchor.r = next.r;
-        this.anchor.c = next.c;
+        const m = this.mergeAt(next.r, next.c);
+        if (m) {
+          this.sel = { r: m.r1, c: m.c1 };
+          this.anchor = { r: m.r2, c: m.c2 };
+        } else {
+          this.sel = { r: next.r, c: next.c };
+          this.anchor = { r: next.r, c: next.c };
+        }
+      } else {
+        this.sel = { r: next.r, c: next.c };
+        const box = this.expandRange(this.range());
+        this.anchor = { r: box.r1, c: box.c1 };
+        this.sel = { r: box.r2, c: box.c2 };
       }
       this.paintSel();
       const td = this.td(this.sel.r, this.sel.c);
       if (td) td.scrollIntoView({ block: "nearest", inline: "nearest" });
+    },
+
+    move(dr, dc, extend) {
+      if (extend) {
+        this.select(this.sel.r + dr, this.sel.c + dc, true);
+        return;
+      }
+      const m = this.mergeAt(this.sel.r, this.sel.c);
+      let r = this.sel.r;
+      let c = this.sel.c;
+      if (m) {
+        if (dr < 0) r = m.r1 - 1;
+        else if (dr > 0) r = m.r2 + 1;
+        else if (dc < 0) c = m.c1 - 1;
+        else if (dc > 0) c = m.c2 + 1;
+      } else {
+        r += dr;
+        c += dc;
+      }
+      this.select(r, c, false);
     },
 
     selectAll() {
@@ -578,6 +943,11 @@
       this.rows = data.rows || 40;
       this.cols = data.cols || 10;
       this.cells = data.cells || {};
+      this.styles = data.styles || {};
+      this.merges = Array.isArray(data.merges) ? data.merges : [];
+      this.colW = Array.isArray(data.colW) ? data.colW.slice() : [];
+      this.rowH = Array.isArray(data.rowH) ? data.rowH.slice() : [];
+      this.ensureSizes();
       this.loaded = true;
       this.render();
     },
@@ -598,9 +968,32 @@
     if (!isSheet) Sheet.blur();
   };
 
+  const statusMenus = () => menus.filter((m) => !STATUS_SKIP.has(m.id));
+
+  const selectedFileCount = () => [...selectedMenus].reduce((sum, id) => sum + (counts[id] || 0), 0);
+
+  const syncZipUi = () => {
+    const rows = statusMenus();
+    const ids = new Set(rows.map((m) => m.id));
+    for (const id of [...selectedMenus]) {
+      if (!ids.has(id)) selectedMenus.delete(id);
+    }
+    const withFiles = rows.filter((m) => (counts[m.id] || 0) > 0);
+    const checkedWithFiles = withFiles.filter((m) => selectedMenus.has(m.id)).length;
+    if (statusAll) {
+      statusAll.checked = withFiles.length > 0 && checkedWithFiles === withFiles.length;
+      statusAll.indeterminate = checkedWithFiles > 0 && checkedWithFiles < withFiles.length;
+    }
+    if (btnZip) {
+      const n = selectedFileCount();
+      btnZip.disabled = n === 0;
+      btnZip.textContent = n ? `일괄 다운로드 (${n})` : "일괄 다운로드";
+    }
+  };
+
   const renderStatus = () => {
     if (!statusRows || !statusSum) return;
-    const rows = menus.filter((m) => !STATUS_SKIP.has(m.id));
+    const rows = statusMenus();
     const nums = rows.map((m) => counts[m.id] || 0);
     const max = Math.max(1, ...nums);
     const done = nums.filter((n) => n > 0).length;
@@ -611,21 +1004,24 @@
       const n = counts[m.id] || 0;
       const when = n ? formatStatusWhen(latest[m.id]) : "아직 없음";
       const pct = n ? Math.max(10, Math.round((n / max) * 100)) : 0;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "status-row" + (n ? " is-on" : "");
-      btn.dataset.menu = m.id;
-      btn.title = `${m.label} · ${n}개 · ${when}`;
-      btn.innerHTML =
+      const row = document.createElement("div");
+      row.className = "status-row" + (n ? " is-on" : "");
+      row.innerHTML =
+        `<label class="status-check"><input type="checkbox" data-zip="${m.id}" ${selectedMenus.has(m.id) ? "checked" : ""} /></label>` +
+        `<button type="button" class="status-go" data-menu="${m.id}">` +
         `<span class="status-name"><i class="status-dot" aria-hidden="true"></i><span class="status-label"></span></span>` +
         `<span class="status-bar" aria-hidden="true"><i style="width:${pct}%"></i></span>` +
         `<span class="status-n">${n}개</span>` +
-        `<span class="status-when"></span>`;
-      btn.querySelector(".status-label").textContent = m.label;
-      btn.querySelector(".status-when").textContent = when;
-      frag.appendChild(btn);
+        `<span class="status-when"></span>` +
+        `</button>`;
+      const go = row.querySelector(".status-go");
+      go.title = `${m.label} · ${n}개 · ${when}`;
+      row.querySelector(".status-label").textContent = m.label;
+      row.querySelector(".status-when").textContent = when;
+      frag.appendChild(row);
     }
     statusRows.replaceChildren(frag);
+    syncZipUi();
   };
 
   const renderMenus = () => {
@@ -928,10 +1324,69 @@
 
   if (statusRows) {
     statusRows.addEventListener("click", (e) => {
+      if (e.target.closest(".status-check")) return;
       const btn = e.target.closest("[data-menu]");
       if (btn) openMenu(btn.dataset.menu);
     });
+    statusRows.addEventListener("change", (e) => {
+      const box = e.target.closest("[data-zip]");
+      if (!box) return;
+      if (box.checked) selectedMenus.add(box.dataset.zip);
+      else selectedMenus.delete(box.dataset.zip);
+      syncZipUi();
+    });
   }
+
+  if (statusAll) {
+    statusAll.addEventListener("change", () => {
+      const withFiles = statusMenus().filter((m) => (counts[m.id] || 0) > 0);
+      if (statusAll.checked) withFiles.forEach((m) => selectedMenus.add(m.id));
+      else withFiles.forEach((m) => selectedMenus.delete(m.id));
+      renderStatus();
+    });
+  }
+
+  const downloadZip = async () => {
+    const menuIds = [...selectedMenus].filter((id) => (counts[id] || 0) > 0);
+    if (!menuIds.length) {
+      toast("받을 파일이 있는 메뉴를 선택해 주세요");
+      return;
+    }
+    if (btnZip) btnZip.disabled = true;
+    setProgress(0.12);
+    try {
+      const res = await fetch("api/zip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ menuIds }),
+      });
+      if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        throw new Error(data.error || "다운로드에 실패했습니다.");
+      }
+      setProgress(0.82);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const dispo = res.headers.get("Content-Disposition") || "";
+      const encoded = /filename\*=UTF-8''([^;]+)/i.exec(dispo);
+      a.download = encoded ? decodeURIComponent(encoded[1]) : "제출파일.zip";
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast("선택한 메뉴 파일을 받았습니다");
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      setProgress(null);
+      syncZipUi();
+    }
+  };
+
+  if (btnZip) btnZip.addEventListener("click", downloadZip);
 
   menuList.addEventListener("click", (e) => {
     if (e.target.closest(".menu-edit")) return;
@@ -1047,6 +1502,16 @@
     if (e.target.closest(".menu-edit") || e.target === search) return;
 
     const meta = e.ctrlKey || e.metaKey;
+    if (meta && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      Sheet.toggleFmt("bold");
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "u") {
+      e.preventDefault();
+      Sheet.toggleFmt("under");
+      return;
+    }
     if (meta && e.key.toLowerCase() === "z" && !e.shiftKey) {
       if (Sheet.editing && document.activeElement === sheetEditor) return;
       e.preventDefault();
@@ -1070,19 +1535,18 @@
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      if (e.shiftKey) Sheet.select(Sheet.sel.r - 1, Sheet.sel.c);
-      else Sheet.select(Sheet.sel.r + 1, Sheet.sel.c);
+      Sheet.move(e.shiftKey ? -1 : 1, 0, false);
       return;
     }
     if (e.key === "Tab") {
       e.preventDefault();
-      Sheet.select(Sheet.sel.r, Sheet.sel.c + (e.shiftKey ? -1 : 1));
+      Sheet.move(0, e.shiftKey ? -1 : 1, false);
       return;
     }
-    if (e.key === "ArrowUp") { e.preventDefault(); Sheet.select(Sheet.sel.r - 1, Sheet.sel.c, e.shiftKey); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); Sheet.select(Sheet.sel.r + 1, Sheet.sel.c, e.shiftKey); return; }
-    if (e.key === "ArrowLeft") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c - 1, e.shiftKey); return; }
-    if (e.key === "ArrowRight") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c + 1, e.shiftKey); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); Sheet.move(-1, 0, e.shiftKey); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); Sheet.move(1, 0, e.shiftKey); return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); Sheet.move(0, -1, e.shiftKey); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); Sheet.move(0, 1, e.shiftKey); return; }
     if (e.key === "F2") { e.preventDefault(); Sheet.startEdit(false); return; }
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
@@ -1097,8 +1561,37 @@
     }
   });
 
+  const sheetTools = $("sheet-tools");
+  if (sheetTools) {
+    sheetTools.addEventListener("mousedown", (e) => {
+      if (e.target.closest("[data-sheet]")) e.preventDefault();
+    });
+    sheetTools.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-sheet]");
+      if (!btn || btn.disabled) return;
+      const kind = btn.dataset.sheet;
+      if (kind === "merge") {
+        if (Sheet.editing) Sheet.commit(0, 0);
+        Sheet.mergeRange();
+        return;
+      }
+      if (kind === "split") {
+        if (Sheet.editing) Sheet.commit(0, 0);
+        Sheet.splitRange();
+        return;
+      }
+      Sheet.toggleFmt(kind);
+    });
+  }
+
   sheetEl.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+    const grip = e.target.closest("[data-resize]");
+    if (grip) {
+      e.preventDefault();
+      Sheet.startSize(grip.dataset.resize, Number(grip.dataset.i), e);
+      return;
+    }
     const td = e.target.closest("td");
     if (!td) return;
     e.preventDefault();
@@ -1107,6 +1600,10 @@
     Sheet.dragging = true;
   });
   document.addEventListener("mousemove", (e) => {
+    if (Sheet.sizing) {
+      Sheet.moveSize(e);
+      return;
+    }
     if (!Sheet.dragging) return;
     const hit = document.elementFromPoint(e.clientX, e.clientY);
     const td = hit && hit.closest && hit.closest("#sheet td");
@@ -1115,6 +1612,7 @@
   });
   document.addEventListener("mouseup", () => {
     Sheet.dragging = false;
+    Sheet.endSize();
   });
   document.addEventListener("copy", (e) => {
     if (view !== "memo" || Sheet.editing || modal.classList.contains("is-hidden") === false) return;

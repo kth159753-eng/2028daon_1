@@ -64,8 +64,14 @@
       <section class="pane pane-upload" id="pane-upload">
         <div class="status-board" id="status-board">
           <div class="status-head">
-            <h2>제출 현황</h2>
-            <p class="status-sum" id="status-sum"></p>
+            <div class="status-title">
+              <h2>제출 현황</h2>
+              <p class="status-sum" id="status-sum"></p>
+            </div>
+            <div class="status-tools">
+              <label class="status-all"><input type="checkbox" id="status-all" /> 전체</label>
+              <button type="button" class="btn-zip" id="btn-zip" disabled>일괄 다운로드</button>
+            </div>
           </div>
           <div class="status-rows" id="status-rows"></div>
         </div>
@@ -101,6 +107,17 @@
         <div class="files-head">
           <div>
             <h2 id="sheet-title">메모장(자유롭게)</h2>
+          </div>
+          <div class="sheet-tools" id="sheet-tools">
+            <button type="button" data-sheet="merge" title="셀 병합">병합</button>
+            <button type="button" data-sheet="split" title="셀 분리">분리</button>
+            <span class="sheet-tools-gap" aria-hidden="true"></span>
+            <button type="button" data-sheet="bold" title="진하게 (Ctrl+B)"><b>B</b></button>
+            <button type="button" data-sheet="under" title="밑줄 (Ctrl+U)"><u>U</u></button>
+            <span class="sheet-tools-gap" aria-hidden="true"></span>
+            <button type="button" class="sheet-swatch is-red" data-sheet="red" title="빨강"></button>
+            <button type="button" class="sheet-swatch is-blue" data-sheet="blue" title="파랑"></button>
+            <button type="button" class="sheet-swatch is-green" data-sheet="green" title="초록"></button>
           </div>
           <span class="sheet-addr" id="sheet-addr">A1</span>
         </div>
