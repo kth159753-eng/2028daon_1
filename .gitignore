@@ -3,6 +3,7 @@ uploads/*
 !uploads/.gitkeep
 data/meta.json
 data/meta.json.tmp
+data/previews/
 storage/
 .DS_Store
 Thumbs.db

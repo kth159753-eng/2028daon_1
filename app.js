@@ -40,6 +40,15 @@
   const loginPass = $("login-pass");
   const loginErr = $("login-err");
   const navHint = $("nav-hint");
+  const schedList = $("sched-list");
+  const schedPop = $("sched-pop");
+  const schedForm = $("sched-form");
+  const schedDate = $("sched-date");
+  const schedTime = $("sched-time");
+  const schedText = $("sched-text");
+  const schedDelete = $("sched-delete");
+  const schedTitle = $("sched-pop-title");
+  const onlineCountEl = $("online-count");
 
   const ICONS = {
     note: `<svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M5 3.4A1.4 1.4 0 0 0 3.6 4.8v10.4A1.4 1.4 0 0 0 5 16.6h10a1.4 1.4 0 0 0 1.4-1.4V7.1L12.9 3.4H5Zm1.6 4.2h4.2a.7.7 0 1 1 0 1.4H6.6a.7.7 0 1 1 0-1.4Zm0 3h6.8a.7.7 0 1 1 0 1.4H6.6a.7.7 0 1 1 0-1.4Z"/></svg>`,
@@ -66,6 +75,7 @@
   const cache = new Map();
   let menus = [];
   let counts = {};
+  let latest = {};
   let view = "upload";
   let pending = [];
   let shownFiles = [];
@@ -75,7 +85,9 @@
   let slideIndex = 0;
   let currentSlides = [];
   let previewToken = 0;
+  let previewUrl = "";
   const slideCache = new Map();
+  const OFFICE = new Set(["ppt", "pptx", "pot", "potx", "pps", "ppsx", "hwp", "hwpx", "hwt"]);
 
   const extOf = (name) => {
     const i = name.lastIndexOf(".");
@@ -92,6 +104,110 @@
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
     return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
+  };
+
+  const formatMenuWhen = (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const now = new Date();
+    if (d.getFullYear() !== now.getFullYear()) {
+      return `${String(d.getFullYear()).slice(2)}. ${d.getMonth() + 1}. ${d.getDate()}.`;
+    }
+    return `${d.getMonth() + 1}. ${d.getDate()}.`;
+  };
+
+  const applyStats = (data) => {
+    if (data.counts) counts = data.counts;
+    if (data.latest) latest = data.latest;
+  };
+
+  let events = [];
+  let editingEventId = "";
+  const sessionId = (() => {
+    try {
+      let id = sessionStorage.getItem("daon-sid");
+      if (!id) {
+        id = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random()).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
+        if (id.length < 8) id = (id + "sessionid").slice(0, 16);
+        sessionStorage.setItem("daon-sid", id);
+      }
+      return id;
+    } catch (_) {
+      return "s" + Date.now() + Math.random().toString(36).slice(2, 8);
+    }
+  })();
+
+  const setOnline = (n) => {
+    if (onlineCountEl) onlineCountEl.textContent = String(Math.max(1, Number(n) || 1));
+  };
+
+  const eventStamp = (ev) => ev.date + "T" + (ev.time || "00:00");
+
+  const daysUntil = (ev) => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const d = new Date(ev.date + "T00:00:00");
+    if (Number.isNaN(d.getTime())) return 999;
+    return Math.round((d - start) / 86400000);
+  };
+
+  const formatEventWhen = (ev) => {
+    const [y, m, d] = ev.date.split("-");
+    const date = `${Number(m)}. ${Number(d)}.`;
+    return ev.time ? `${date} ${ev.time}` : date;
+  };
+
+  const visibleEvents = () => events
+    .filter((ev) => daysUntil(ev) >= 0)
+    .slice()
+    .sort((a, b) => eventStamp(a).localeCompare(eventStamp(b)));
+
+  const renderEvents = () => {
+    if (!schedList) return;
+    const frag = document.createDocumentFragment();
+    for (const ev of visibleEvents()) {
+      const soon = daysUntil(ev) <= 3;
+      const wrap = document.createElement("div");
+      wrap.className = "sched-item" + (soon ? " is-soon" : "");
+      wrap.innerHTML =
+        `<button type="button" class="sched-main" data-sched="${ev.id}"></button>` +
+        `<button type="button" class="sched-x" data-sched-del="${ev.id}" aria-label="일정 삭제">×</button>`;
+      const mainBtn = wrap.querySelector(".sched-main");
+      const when = document.createElement("span");
+      when.className = "sched-when";
+      when.textContent = formatEventWhen(ev);
+      mainBtn.appendChild(when);
+      if (ev.text) {
+        const label = document.createElement("span");
+        label.className = "sched-text";
+        label.textContent = ev.text;
+        mainBtn.appendChild(label);
+      }
+      frag.appendChild(wrap);
+    }
+    schedList.replaceChildren(frag);
+  };
+
+  const closeSched = () => {
+    if (schedPop) schedPop.classList.add("is-hidden");
+    editingEventId = "";
+  };
+
+  const openSched = (ev) => {
+    editingEventId = ev && ev.id ? ev.id : "";
+    schedTitle.textContent = editingEventId ? "일정 수정" : "일정 등록";
+    schedDate.value = ev && ev.date ? ev.date : "";
+    schedTime.value = ev && ev.time ? ev.time : "";
+    schedText.value = ev && ev.text ? ev.text : "";
+    schedDelete.classList.toggle("is-hidden", !editingEventId);
+    schedPop.classList.remove("is-hidden");
+    schedDate.focus();
+  };
+
+  const applyEvents = (list) => {
+    if (!Array.isArray(list)) return;
+    events = list;
+    renderEvents();
   };
 
   const toast = (msg) => {
@@ -125,6 +241,8 @@
     cols: 10,
     cells: {},
     sel: { r: 0, c: 0 },
+    anchor: { r: 0, c: 0 },
+    dragging: false,
     editing: false,
     editFrom: "",
     undo: [],
@@ -140,11 +258,38 @@
       return sheetEl.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     },
 
+    clamp(r, c) {
+      return {
+        r: Math.max(0, Math.min(this.rows - 1, r)),
+        c: Math.max(0, Math.min(this.cols - 1, c)),
+      };
+    },
+
+    range() {
+      return {
+        r1: Math.min(this.anchor.r, this.sel.r),
+        c1: Math.min(this.anchor.c, this.sel.c),
+        r2: Math.max(this.anchor.r, this.sel.r),
+        c2: Math.max(this.anchor.c, this.sel.c),
+      };
+    },
+
     paintSel() {
-      sheetEl.querySelectorAll("td.is-sel").forEach((el) => el.classList.remove("is-sel"));
-      const td = this.td(this.sel.r, this.sel.c);
-      if (td) td.classList.add("is-sel");
-      sheetAddr.textContent = this.addr(this.sel.r, this.sel.c);
+      sheetEl.querySelectorAll("td.is-sel, td.is-range").forEach((el) => {
+        el.classList.remove("is-sel", "is-range");
+      });
+      const { r1, c1, r2, c2 } = this.range();
+      for (let r = r1; r <= r2; r++) {
+        for (let c = c1; c <= c2; c++) {
+          const td = this.td(r, c);
+          if (td) td.classList.add("is-range");
+        }
+      }
+      const active = this.td(this.sel.r, this.sel.c);
+      if (active) active.classList.add("is-sel");
+      sheetAddr.textContent = r1 === r2 && c1 === c2
+        ? this.addr(r1, c1)
+        : this.addr(r1, c1) + ":" + this.addr(r2, c2);
     },
 
     render() {
@@ -206,13 +351,17 @@
       } catch (_) {}
     },
 
-    apply(r, c, next, record) {
-      const prev = this.get(r, c);
-      if (prev === next) return false;
+    write(r, c, next) {
       if (next) this.cells[this.key(r, c)] = next;
       else delete this.cells[this.key(r, c)];
       const td = this.td(r, c);
       if (td && !this.editing) td.textContent = next;
+    },
+
+    apply(r, c, next, record) {
+      const prev = this.get(r, c);
+      if (prev === next) return false;
+      this.write(r, c, next);
       if (record) {
         this.undo.push({ r, c, from: prev, to: next });
         if (this.undo.length > 200) this.undo.shift();
@@ -223,10 +372,50 @@
       return true;
     },
 
+    applyMany(pairs) {
+      if (!pairs.length) return;
+      let maxR = this.rows - 1;
+      let maxC = this.cols - 1;
+      for (const p of pairs) {
+        maxR = Math.max(maxR, p.r);
+        maxC = Math.max(maxC, p.c);
+      }
+      this.grow(maxR, maxC);
+      const many = [];
+      for (const p of pairs) {
+        const from = this.get(p.r, p.c);
+        if (from === p.to) continue;
+        this.write(p.r, p.c, p.to);
+        many.push({ r: p.r, c: p.c, from, to: p.to });
+      }
+      if (!many.length) return;
+      this.undo.push({
+        many,
+        sel: { r: this.sel.r, c: this.sel.c },
+        anchor: { r: this.anchor.r, c: this.anchor.c },
+      });
+      if (this.undo.length > 200) this.undo.shift();
+      this.redo.length = 0;
+      this.scheduleSave();
+    },
+
+    restoreSel(item) {
+      if (item.sel) this.sel = { r: item.sel.r, c: item.sel.c };
+      if (item.anchor) this.anchor = { r: item.anchor.r, c: item.anchor.c };
+      else this.anchor = { r: this.sel.r, c: this.sel.c };
+      this.paintSel();
+    },
+
     undoLast() {
       const item = this.undo.pop();
       if (!item) return;
       this.redo.push(item);
+      if (item.many) {
+        for (const ch of item.many) this.write(ch.r, ch.c, ch.from);
+        this.restoreSel(item);
+        this.scheduleSave();
+        return;
+      }
       this.apply(item.r, item.c, item.from, false);
       this.select(item.r, item.c);
     },
@@ -235,8 +424,67 @@
       const item = this.redo.pop();
       if (!item) return;
       this.undo.push(item);
+      if (item.many) {
+        for (const ch of item.many) this.write(ch.r, ch.c, ch.to);
+        this.restoreSel(item);
+        this.scheduleSave();
+        return;
+      }
       this.apply(item.r, item.c, item.to, false);
       this.select(item.r, item.c);
+    },
+
+    copyText() {
+      const { r1, c1, r2, c2 } = this.range();
+      const lines = [];
+      for (let r = r1; r <= r2; r++) {
+        const cols = [];
+        for (let c = c1; c <= c2; c++) {
+          cols.push(this.get(r, c).replace(/\t/g, " ").replace(/\r?\n/g, "\n"));
+        }
+        lines.push(cols.join("\t"));
+      }
+      return lines.join("\n");
+    },
+
+    parseTsv(text) {
+      const raw = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const body = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+      if (!body) return [[""]];
+      return body.split("\n").map((line) => line.split("\t"));
+    },
+
+    paste(text) {
+      const grid = this.parseTsv(text);
+      const { r1, c1, r2, c2 } = this.range();
+      const one = grid.length === 1 && grid[0].length === 1;
+      const fill = one && (r1 !== r2 || c1 !== c2);
+      const pairs = [];
+      if (fill) {
+        for (let r = r1; r <= r2; r++) {
+          for (let c = c1; c <= c2; c++) pairs.push({ r, c, to: grid[0][0] });
+        }
+      } else {
+        for (let i = 0; i < grid.length; i++) {
+          for (let j = 0; j < grid[i].length; j++) {
+            pairs.push({ r: r1 + i, c: c1 + j, to: grid[i][j] });
+          }
+        }
+        const last = pairs[pairs.length - 1];
+        this.sel = this.clamp(last.r, last.c);
+        this.anchor = { r: r1, c: c1 };
+      }
+      this.applyMany(pairs);
+      this.paintSel();
+    },
+
+    clearRange() {
+      const { r1, c1, r2, c2 } = this.range();
+      const pairs = [];
+      for (let r = r1; r <= r2; r++) {
+        for (let c = c1; c <= c2; c++) pairs.push({ r, c, to: "" });
+      }
+      this.applyMany(pairs);
     },
 
     placeEditor(td) {
@@ -296,12 +544,23 @@
       if (this.editing) this.commit(0, 0);
     },
 
-    select(r, c) {
-      this.sel.r = Math.max(0, Math.min(this.rows - 1, r));
-      this.sel.c = Math.max(0, Math.min(this.cols - 1, c));
+    select(r, c, extend) {
+      const next = this.clamp(r, c);
+      this.sel.r = next.r;
+      this.sel.c = next.c;
+      if (!extend) {
+        this.anchor.r = next.r;
+        this.anchor.c = next.c;
+      }
       this.paintSel();
       const td = this.td(this.sel.r, this.sel.c);
       if (td) td.scrollIntoView({ block: "nearest", inline: "nearest" });
+    },
+
+    selectAll() {
+      this.anchor = { r: 0, c: 0 };
+      this.sel = { r: this.rows - 1, c: this.cols - 1 };
+      this.paintSel();
     },
 
     insertNewline() {
@@ -348,12 +607,17 @@
       btn.className = "menu-item" + (view === m.id ? " is-active" : "");
       btn.dataset.menu = m.id;
       const n = counts[m.id] || 0;
+      const when = formatMenuWhen(latest[m.id]);
       btn.innerHTML =
         `<span class="menu-ico" aria-hidden="true">${ICONS[m.icon] || ICONS.doc}</span>` +
-        `<span class="menu-label"></span>` +
+        `<span class="menu-text"><span class="menu-label"></span>${when ? `<span class="menu-date"></span>` : ""}</span>` +
         (n ? `<span class="menu-count">${n}</span>` : "");
       btn.querySelector(".menu-label").textContent = m.label;
-      btn.title = "더블클릭하면 제목을 바꿀 수 있습니다";
+      const dateEl = btn.querySelector(".menu-date");
+      if (dateEl) dateEl.textContent = when;
+      btn.title = when
+        ? `최근 파일 ${formatWhen(latest[m.id])} · 더블클릭하면 제목을 바꿀 수 있습니다`
+        : "더블클릭하면 제목을 바꿀 수 있습니다";
       frag.appendChild(btn);
     }
     menuList.replaceChildren(frag);
@@ -445,6 +709,25 @@
     renderSlide();
   };
 
+  const showPdfFrame = (url) => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = url;
+    previewBody.innerHTML = `<iframe class="preview-frame" src="${url}#toolbar=1" title="미리보기"></iframe>`;
+  };
+
+  const openOfficePreview = async (file, alive) => {
+    previewBody.innerHTML = `<div class="preview-empty">원래 양식으로 변환하는 중…<br />처음 한 번은 조금 걸릴 수 있습니다.</div>`;
+    const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
+    if (!res.ok) {
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      throw new Error(data.error || "원래 양식 미리보기를 만들지 못했습니다.");
+    }
+    const blob = await res.blob();
+    if (!alive()) return;
+    showPdfFrame(URL.createObjectURL(blob));
+  };
+
   const openPreview = async (file) => {
     const token = ++previewToken;
     if (!file) {
@@ -460,7 +743,16 @@
     const ext = file.ext;
     const alive = () => token === previewToken;
     if (ext === "pdf") {
-      previewBody.innerHTML = `<iframe class="preview-frame" src="api/preview/${encodeURIComponent(file.id)}#toolbar=1" title="미리보기"></iframe>`;
+      previewBody.innerHTML = `<div class="preview-empty">불러오는 중…</div>`;
+      try {
+        const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
+        if (!res.ok) throw new Error();
+        const blob = await res.blob();
+        if (!alive()) return;
+        showPdfFrame(URL.createObjectURL(blob));
+      } catch (_) {
+        if (alive()) showFallback(file, "미리보기를 불러오지 못했습니다.");
+      }
       return;
     }
     if (ext === "txt" || ext === "text") {
@@ -477,35 +769,15 @@
       }
       return;
     }
-    if (ext === "pptx" || ext === "ppsx" || ext === "potx" || ext === "hwpx") {
-      previewBody.innerHTML = `<div class="preview-empty">미리보기를 만드는 중…</div>`;
+    if (OFFICE.has(ext)) {
       try {
-        let data = slideCache.get(file.id);
-        if (!data) {
-          const res = await fetch("api/slides/" + encodeURIComponent(file.id), { cache: "no-store" });
-          data = await res.json();
-          if (!res.ok) throw new Error(data.error || "");
-          slideCache.set(file.id, data);
-        }
-        if (!alive()) return;
-        currentSlides = data.slides || [];
-        if (!currentSlides.length) {
-          showFallback(file, "이 파일에서 미리볼 내용을 찾지 못했습니다.");
-          return;
-        }
-        previewNav.classList.toggle("is-hidden", currentSlides.length < 2);
-        renderSlide();
-      } catch (_) {
-        if (alive()) showFallback(file, "미리보기를 만들지 못했습니다.");
+        await openOfficePreview(file, alive);
+      } catch (e) {
+        if (alive()) showFallback(file, e.message || "원래 양식 미리보기를 만들지 못했습니다.");
       }
       return;
     }
-    const label = ext === "ppt" || ext === "pps" || ext === "pot"
-      ? "구버전 PowerPoint(ppt)는 브라우저 미리보기를 지원하지 않습니다."
-      : ext === "hwp"
-        ? "한글(hwp) 파일은 브라우저에서 미리볼 수 없습니다."
-        : "이 형식은 브라우저 미리보기를 지원하지 않습니다.";
-    showFallback(file, label);
+    showFallback(file, "이 형식은 브라우저 미리보기를 지원하지 않습니다.");
   };
 
   const renderFiles = (menuId, files) => {
@@ -661,7 +933,7 @@
     setProgress(0.05);
     try {
       const data = await postUpload(menuId, files);
-      counts = data.counts;
+      applyStats(data);
       cache.delete(menuId);
       for (const f of data.files || []) slideCache.delete(f.id);
       renderMenus();
@@ -690,7 +962,7 @@
       const res = await fetch("api/files/" + encodeURIComponent(id), { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "삭제 실패");
-      counts = data.counts;
+      applyStats(data);
       cache.delete(view);
       slideCache.delete(id);
       if (selectedId === id) selectedId = "";
@@ -800,6 +1072,69 @@
   previewPrev.addEventListener("click", () => moveSlide(-1));
   previewNext.addEventListener("click", () => moveSlide(1));
 
+  if ($("sched-add")) $("sched-add").addEventListener("click", () => openSched(null));
+  if (schedPop) {
+    schedPop.addEventListener("click", (e) => {
+      if (e.target === schedPop) closeSched();
+    });
+  }
+  if ($("sched-cancel")) $("sched-cancel").addEventListener("click", closeSched);
+  if (schedDelete) {
+    schedDelete.addEventListener("click", async () => {
+      if (!editingEventId || !confirm("이 일정을 삭제할까요?")) return;
+      try {
+        const res = await fetch("api/events/" + encodeURIComponent(editingEventId), { method: "DELETE" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "삭제 실패");
+        applyEvents(data.events);
+        closeSched();
+      } catch (e) {
+        toast(e.message);
+      }
+    });
+  }
+  if (schedForm) {
+    schedForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = { date: schedDate.value, time: schedTime.value, text: schedText.value };
+      try {
+        const res = await fetch(editingEventId ? "api/events/" + encodeURIComponent(editingEventId) : "api/events", {
+          method: editingEventId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "저장 실패");
+        applyEvents(data.events);
+        closeSched();
+      } catch (err) {
+        toast(err.message);
+      }
+    });
+  }
+  if (schedList) {
+    schedList.addEventListener("click", async (e) => {
+      const del = e.target.closest("[data-sched-del]");
+      if (del) {
+        e.preventDefault();
+        if (!confirm("이 일정을 삭제할까요?")) return;
+        try {
+          const res = await fetch("api/events/" + encodeURIComponent(del.dataset.schedDel), { method: "DELETE" });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "삭제 실패");
+          applyEvents(data.events);
+        } catch (err) {
+          toast(err.message);
+        }
+        return;
+      }
+      const btn = e.target.closest("[data-sched]");
+      if (!btn) return;
+      const ev = events.find((item) => item.id === btn.dataset.sched);
+      if (ev) openSched(ev);
+    });
+  }
+
   btnUpload.addEventListener("click", () => setView("upload"));
   $("btn-pick").addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => takeFiles(fileInput.files));
@@ -814,6 +1149,11 @@
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (schedPop && !schedPop.classList.contains("is-hidden")) {
+        e.preventDefault();
+        closeSched();
+        return;
+      }
       if (Sheet.editing) {
         e.preventDefault();
         Sheet.cancelEdit();
@@ -845,6 +1185,11 @@
     if (Sheet.editing) return;
     if (e.isComposing || e.keyCode === 229) return;
 
+    if (meta && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      Sheet.selectAll();
+      return;
+    }
     if (e.key === "Enter") {
       e.preventDefault();
       if (e.shiftKey) Sheet.select(Sheet.sel.r - 1, Sheet.sel.c);
@@ -856,16 +1201,14 @@
       Sheet.select(Sheet.sel.r, Sheet.sel.c + (e.shiftKey ? -1 : 1));
       return;
     }
-    if (e.key === "ArrowUp") { e.preventDefault(); Sheet.select(Sheet.sel.r - 1, Sheet.sel.c); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); Sheet.select(Sheet.sel.r + 1, Sheet.sel.c); return; }
-    if (e.key === "ArrowLeft") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c - 1); return; }
-    if (e.key === "ArrowRight") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c + 1); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); Sheet.select(Sheet.sel.r - 1, Sheet.sel.c, e.shiftKey); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); Sheet.select(Sheet.sel.r + 1, Sheet.sel.c, e.shiftKey); return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c - 1, e.shiftKey); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); Sheet.select(Sheet.sel.r, Sheet.sel.c + 1, e.shiftKey); return; }
     if (e.key === "F2") { e.preventDefault(); Sheet.startEdit(false); return; }
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
-      Sheet.apply(Sheet.sel.r, Sheet.sel.c, "", true);
-      const td = Sheet.td(Sheet.sel.r, Sheet.sel.c);
-      if (td) td.textContent = "";
+      Sheet.clearRange();
       return;
     }
     if (e.key.length === 1 && !meta && !e.altKey) {
@@ -877,10 +1220,39 @@
   });
 
   sheetEl.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
     const td = e.target.closest("td");
     if (!td) return;
+    e.preventDefault();
     if (Sheet.editing) Sheet.commit(0, 0);
-    Sheet.select(Number(td.dataset.r), Number(td.dataset.c));
+    Sheet.select(Number(td.dataset.r), Number(td.dataset.c), e.shiftKey);
+    Sheet.dragging = true;
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!Sheet.dragging) return;
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    const td = hit && hit.closest && hit.closest("#sheet td");
+    if (!td) return;
+    Sheet.select(Number(td.dataset.r), Number(td.dataset.c), true);
+  });
+  document.addEventListener("mouseup", () => {
+    Sheet.dragging = false;
+  });
+  document.addEventListener("copy", (e) => {
+    if (view !== "memo" || Sheet.editing || modal.classList.contains("is-hidden") === false) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", Sheet.copyText());
+  });
+  document.addEventListener("cut", (e) => {
+    if (view !== "memo" || Sheet.editing || modal.classList.contains("is-hidden") === false) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", Sheet.copyText());
+    Sheet.clearRange();
+  });
+  document.addEventListener("paste", (e) => {
+    if (view !== "memo" || Sheet.editing || modal.classList.contains("is-hidden") === false) return;
+    e.preventDefault();
+    Sheet.paste(e.clipboardData.getData("text/plain"));
   });
 
   sheetEl.addEventListener("dblclick", (e) => {
@@ -963,11 +1335,28 @@
 
   const startApp = (data) => {
     menus = data.menus;
-    counts = data.counts;
+    applyStats(data);
+    applyEvents(data.events);
+    if (data.online != null) setOnline(data.online);
     if (data.persist === false && navHint) {
       navHint.textContent = "무료 서버는 재시작하면 파일이 사라질 수 있습니다. GITHUB_TOKEN을 설정하세요.";
     }
     renderMenus();
+    const beat = async () => {
+      try {
+        const res = await fetch("api/presence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId }),
+        });
+        const next = await res.json();
+        if (res.ok && next.online != null) setOnline(next.online);
+      } catch (_) {}
+    };
+    beat();
+    setInterval(() => {
+      if (!document.hidden) beat();
+    }, 5000);
     setInterval(async () => {
       if (document.hidden || menuList.querySelector(".menu-edit")) return;
       try {
@@ -975,7 +1364,9 @@
         if (!poll.ok) return;
         const next = await poll.json();
         menus = next.menus;
-        counts = next.counts;
+        applyStats(next);
+        applyEvents(next.events);
+        if (next.online != null) setOnline(next.online);
         renderMenus();
         if (view !== "upload") {
           const menu = menus.find((m) => m.id === view);

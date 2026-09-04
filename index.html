@@ -31,7 +31,17 @@
       <h1>2028 대입 지도서 (다온)</h1>
       <span class="nav-sub">첨부파일</span>
     </div>
-    <p class="nav-hint" id="nav-hint">빠른 피드백과 신속한 작업을 위해서 만들었습니당~!</p>
+    <div class="nav-sched" id="nav-sched">
+      <button type="button" class="sched-add" id="sched-add" title="일정 등록">+</button>
+      <div class="sched-list" id="sched-list"></div>
+    </div>
+    <div class="nav-right">
+      <p class="nav-hint" id="nav-hint">빠른 피드백과 신속한 작업을 위해서 만들었습니당~!</p>
+      <div class="nav-online" id="nav-online" title="지금 보고 있는 사람">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10 2.6A3.4 3.4 0 1 1 10 9.4 3.4 3.4 0 0 1 10 2.6Zm0 8.2c3.4 0 6.4 1.8 6.4 4.2v1.2a.8.8 0 0 1-.8.8H4.4a.8.8 0 0 1-.8-.8V15c0-2.4 3-4.2 6.4-4.2Z"/></svg>
+        <span id="online-count">1</span>
+      </div>
+    </div>
   </header>
 
   <div class="progress is-hidden" id="progress"><i id="progress-bar"></i></div>
@@ -117,6 +127,20 @@
       <div class="modal-menus" id="modal-menus"></div>
       <button type="button" class="btn-ghost" id="modal-cancel">취소</button>
     </div>
+  </div>
+
+  <div class="sched-pop is-hidden" id="sched-pop" role="dialog" aria-modal="true" aria-labelledby="sched-pop-title">
+    <form class="sched-card" id="sched-form">
+      <h3 id="sched-pop-title">일정 등록</h3>
+      <label>날짜<input id="sched-date" type="date" required /></label>
+      <label>시간<input id="sched-time" type="time" /></label>
+      <label>내용<input id="sched-text" type="text" maxlength="80" placeholder="예: 정시 초안 공유" /></label>
+      <div class="sched-actions">
+        <button type="button" class="btn-ghost" id="sched-delete">삭제</button>
+        <button type="button" class="btn-ghost" id="sched-cancel">취소</button>
+        <button type="submit" class="btn-pick" id="sched-save">저장</button>
+      </div>
+    </form>
   </div>
 
   <div class="toast" id="toast" hidden></div>

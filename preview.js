@@ -136,8 +136,9 @@ function previewKind(ext) {
   const e = String(ext || "").toLowerCase();
   if (e === "pdf") return "pdf";
   if (TEXT_EXTS.has(e)) return "text";
-  if (SLIDE_EXTS.has(e)) return "slides";
-  if (e === "hwpx") return "hwpx";
+  if (SLIDE_EXTS.has(e) || e === "ppt" || e === "pps" || e === "pot" || e === "hwp" || e === "hwpx" || e === "hwt") {
+    return "office";
+  }
   return "none";
 }
 

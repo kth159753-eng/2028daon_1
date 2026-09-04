@@ -9,7 +9,8 @@ const express = require("express");
 const compression = require("compression");
 const multer = require("multer");
 const { createStore } = require("./store");
-const { previewKind, previewMime, buildSlides } = require("./preview");
+const { previewKind, previewMime } = require("./preview");
+const { ensurePdf, removePdf, isOfficeExt } = require("./convert");
 
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
 const START_PORT = Number(process.env.PORT) || 3080;
@@ -18,6 +19,7 @@ const PUBLIC_DIR = ROOT;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT, "data"));
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || (process.env.DATA_DIR ? path.join(DATA_DIR, "uploads") : path.join(ROOT, "uploads")));
 const META_PATH = path.join(DATA_DIR, "meta.json");
+const PREVIEW_DIR = path.join(DATA_DIR, "previews");
 const TEAM_PASSWORD = String(process.env.TEAM_PASSWORD || process.env.ACCESS_PASSWORD || "");
 const AUTH_SECRET = process.env.SESSION_SECRET || TEAM_PASSWORD || "daon-local";
 
@@ -97,13 +99,14 @@ function setAuthCookie(res, req) {
   );
 }
 
-let meta = { files: [], labels: {}, sheet: null };
+let meta = { files: [], labels: {}, sheet: null, events: [] };
 
 function hydrateMeta(parsed) {
   const next = parsed && typeof parsed === "object" ? parsed : { files: [], labels: {}, sheet: null };
   if (!Array.isArray(next.files)) next.files = [];
   if (!next.labels || typeof next.labels !== "object" || Array.isArray(next.labels)) next.labels = {};
   next.sheet = normalizeSheet(next.sheet);
+  next.events = normalizeEvents(next.events);
   return next;
 }
 
@@ -169,6 +172,8 @@ app.use((req, res, next) => {
     p === "/server.js" ||
     p === "/store.js" ||
     p === "/preview.js" ||
+    p === "/convert.js" ||
+    p.startsWith("/scripts") ||
     p.startsWith("/package") ||
     p.endsWith(".bat") ||
     p.endsWith(".json") ||
@@ -203,6 +208,19 @@ function counts() {
   return map;
 }
 
+function latest() {
+  const map = {};
+  for (const f of meta.files) {
+    if (!MENU_IDS.has(f.menuId) || !f.uploadedAt) continue;
+    if (!map[f.menuId] || f.uploadedAt > map[f.menuId]) map[f.menuId] = f.uploadedAt;
+  }
+  return map;
+}
+
+function fileStats() {
+  return { counts: counts(), latest: latest() };
+}
+
 function publicFile(f) {
   return { id: f.id, name: f.name, ext: f.ext, size: f.size, uploadedAt: f.uploadedAt, menuId: f.menuId };
 }
@@ -221,6 +239,40 @@ function normalizeSheet(raw) {
     }
   }
   return { rows, cols, cells };
+}
+
+function normalizeEvents(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+    const date = String(item.date || "");
+    const time = String(item.time || "");
+    const text = String(item.text == null ? "" : item.text).replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!id || seen.has(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (time && !/^\d{2}:\d{2}$/.test(time)) continue;
+    seen.add(id);
+    out.push({ id, date, time, text });
+  }
+  out.sort((a, b) => (a.date + (a.time || "00:00")).localeCompare(b.date + (b.time || "00:00")));
+  return out.slice(0, 40);
+}
+
+function publicEvents() {
+  return normalizeEvents(meta.events);
+}
+
+const presence = new Map();
+const PRESENCE_MS = 25000;
+
+function onlineCount() {
+  const now = Date.now();
+  for (const [id, at] of presence) {
+    if (now - at > PRESENCE_MS) presence.delete(id);
+  }
+  return presence.size;
 }
 
 function publicMenus() {
@@ -261,7 +313,102 @@ app.post("/api/login", (req, res) => {
 app.get("/api/bootstrap", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const persist = store.kind === "github" || Boolean(process.env.DATA_DIR) || !IS_PROD;
-  res.json({ menus: publicMenus(), counts: counts(), persist, store: store.kind });
+  res.json({
+    menus: publicMenus(),
+    persist,
+    store: store.kind,
+    events: publicEvents(),
+    online: onlineCount(),
+    ...fileStats(),
+  });
+});
+
+app.get("/api/events", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ events: publicEvents() });
+});
+
+app.post("/api/events", async (req, res) => {
+  const body = req.body || {};
+  const row = normalizeEvents([{
+    id: crypto.randomBytes(8).toString("hex"),
+    date: body.date,
+    time: body.time,
+    text: body.text,
+  }])[0];
+  if (!row) {
+    res.status(400).json({ error: "날짜와 내용을 확인해 주세요." });
+    return;
+  }
+  if (!Array.isArray(meta.events)) meta.events = [];
+  meta.events.push(row);
+  meta.events = normalizeEvents(meta.events);
+  try {
+    await saveMeta(meta);
+  } catch (_) {
+    res.status(500).json({ error: "저장에 실패했습니다." });
+    return;
+  }
+  res.json({ ok: true, events: publicEvents() });
+});
+
+app.patch("/api/events/:id", async (req, res) => {
+  const id = String(req.params.id || "");
+  if (!Array.isArray(meta.events)) meta.events = [];
+  const idx = meta.events.findIndex((e) => e.id === id);
+  if (idx < 0) {
+    res.status(404).json({ error: "일정을 찾을 수 없습니다." });
+    return;
+  }
+  const body = req.body || {};
+  const next = normalizeEvents([{
+    id,
+    date: body.date != null ? body.date : meta.events[idx].date,
+    time: body.time != null ? body.time : meta.events[idx].time,
+    text: body.text != null ? body.text : meta.events[idx].text,
+  }])[0];
+  if (!next) {
+    res.status(400).json({ error: "날짜와 내용을 확인해 주세요." });
+    return;
+  }
+  meta.events[idx] = next;
+  meta.events = normalizeEvents(meta.events);
+  try {
+    await saveMeta(meta);
+  } catch (_) {
+    res.status(500).json({ error: "저장에 실패했습니다." });
+    return;
+  }
+  res.json({ ok: true, events: publicEvents() });
+});
+
+app.delete("/api/events/:id", async (req, res) => {
+  const id = String(req.params.id || "");
+  if (!Array.isArray(meta.events)) meta.events = [];
+  const next = meta.events.filter((e) => e.id !== id);
+  if (next.length === meta.events.length) {
+    res.status(404).json({ error: "일정을 찾을 수 없습니다." });
+    return;
+  }
+  meta.events = next;
+  try {
+    await saveMeta(meta);
+  } catch (_) {
+    res.status(500).json({ error: "삭제에 실패했습니다." });
+    return;
+  }
+  res.json({ ok: true, events: publicEvents() });
+});
+
+app.post("/api/presence", (req, res) => {
+  const id = String((req.body && req.body.id) || "").slice(0, 64);
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) {
+    res.status(400).json({ error: "접속 정보를 확인할 수 없습니다." });
+    return;
+  }
+  presence.set(id, Date.now());
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, online: onlineCount() });
 });
 
 app.patch("/api/menus/:id", async (req, res) => {
@@ -363,9 +510,17 @@ app.post("/api/upload", (req, res) => {
       return;
     }
 
-    res.json({ ok: true, files: added, counts: counts() });
+    res.json({ ok: true, files: added, ...fileStats() });
   });
 });
+
+function sendPdf(res, buf) {
+  res.setHeader("Cache-Control", "private, max-age=120");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.end(buf);
+}
 
 app.get("/api/preview/:id", async (req, res) => {
   const row = findFile(String(req.params.id || ""));
@@ -374,11 +529,16 @@ app.get("/api/preview/:id", async (req, res) => {
     return;
   }
   const kind = previewKind(row.ext);
-  if (kind !== "pdf" && kind !== "text") {
-    res.status(400).json({ error: "이 파일은 바로 미리볼 수 없습니다." });
-    return;
-  }
   try {
+    if (kind === "office" || isOfficeExt(row.ext)) {
+      const pdfPath = await ensurePdf(PREVIEW_DIR, row, (stored) => store.readFile(stored));
+      sendPdf(res, fs.readFileSync(pdfPath));
+      return;
+    }
+    if (kind !== "pdf" && kind !== "text") {
+      res.status(400).json({ error: "이 파일은 바로 미리볼 수 없습니다." });
+      return;
+    }
     const buf = await store.readFile(row.stored);
     if (!buf) {
       res.status(404).json({ error: "파일이 디스크에 없습니다." });
@@ -389,33 +549,8 @@ app.get("/api/preview/:id", async (req, res) => {
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.end(buf);
-  } catch (_) {
-    res.status(404).json({ error: "파일이 디스크에 없습니다." });
-  }
-});
-
-app.get("/api/slides/:id", async (req, res) => {
-  const row = findFile(String(req.params.id || ""));
-  if (!row) {
-    res.status(404).json({ error: "파일을 찾을 수 없습니다." });
-    return;
-  }
-  const kind = previewKind(row.ext);
-  if (kind !== "slides" && kind !== "hwpx") {
-    res.status(400).json({ error: "슬라이드 미리보기를 지원하지 않는 형식입니다." });
-    return;
-  }
-  try {
-    const buf = await store.readFile(row.stored);
-    if (!buf) {
-      res.status(404).json({ error: "파일이 디스크에 없습니다." });
-      return;
-    }
-    const slides = await buildSlides(row.ext, buf);
-    res.setHeader("Cache-Control", "private, max-age=120");
-    res.json({ ok: true, name: row.name, slides });
-  } catch (_) {
-    res.status(500).json({ error: "미리보기를 만들지 못했습니다." });
+  } catch (err) {
+    res.status(500).json({ error: (err && err.message) || "원래 양식 미리보기를 만들지 못했습니다." });
   }
 });
 
@@ -443,13 +578,14 @@ app.delete("/api/files/:id", async (req, res) => {
   const [row] = meta.files.splice(idx, 1);
   try {
     await store.deleteFile(row.stored);
+    removePdf(PREVIEW_DIR, row);
     await saveMeta(meta);
   } catch (_) {
     meta.files.splice(idx, 0, row);
     res.status(500).json({ error: "삭제에 실패했습니다." });
     return;
   }
-  res.json({ ok: true, counts: counts() });
+  res.json({ ok: true, ...fileStats() });
 });
 
 app.use((err, _req, res, _next) => {
@@ -535,6 +671,7 @@ async function start() {
     console.error(err && err.message ? err.message : err);
     process.exit(1);
   }
+  fs.mkdirSync(PREVIEW_DIR, { recursive: true });
   if (IS_PROD && store.kind === "local" && !process.env.DATA_DIR) {
     console.log("  경고: 재시작하면 올린 파일이 사라집니다. GITHUB_TOKEN 과 GITHUB_REPO 를 설정하세요.");
   }
