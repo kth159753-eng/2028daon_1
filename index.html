@@ -61,7 +61,14 @@
     </aside>
 
     <main class="main" id="main">
-      <section class="pane" id="pane-upload">
+      <section class="pane pane-upload" id="pane-upload">
+        <div class="status-board" id="status-board">
+          <div class="status-head">
+            <h2>제출 현황</h2>
+            <p class="status-sum" id="status-sum"></p>
+          </div>
+          <div class="status-rows" id="status-rows"></div>
+        </div>
         <div class="drop" id="drop" tabindex="0">
           <input id="file-input" type="file" multiple hidden accept=".ppt,.pptx,.pot,.potx,.pps,.ppsx,.hwp,.hwpx,.hwt,.hml,.hwpml,.owpml,.cell,.show,.nxl,.nxls,.txt,.text,.pdf" />
           <div class="drop-inner">
@@ -88,19 +95,6 @@
           <input class="search" id="search" type="search" placeholder="파일 이름 찾기" />
         </div>
         <div class="files-wrap" id="files-wrap"></div>
-        <div class="preview" id="preview">
-          <div class="preview-bar">
-            <span class="preview-name" id="preview-name">파일을 누르면 아래에서 미리봅니다</span>
-            <div class="preview-nav is-hidden" id="preview-nav">
-              <button type="button" class="preview-btn" id="preview-prev" aria-label="이전 슬라이드">이전</button>
-              <span class="preview-page" id="preview-page">1 / 1</span>
-              <button type="button" class="preview-btn" id="preview-next" aria-label="다음 슬라이드">다음</button>
-            </div>
-          </div>
-          <div class="preview-body" id="preview-body">
-            <div class="preview-empty">파일을 누르면 이 칸에서 넓게 미리봅니다</div>
-          </div>
-        </div>
       </section>
 
       <section class="pane pane-sheet is-hidden" id="pane-sheet">

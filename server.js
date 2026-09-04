@@ -9,8 +9,6 @@ const express = require("express");
 const compression = require("compression");
 const multer = require("multer");
 const { createStore } = require("./store");
-const { previewKind, previewMime } = require("./preview");
-const { ensurePdf, removePdf, isOfficeExt } = require("./convert");
 
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME);
 const START_PORT = Number(process.env.PORT) || 3080;
@@ -19,7 +17,6 @@ const PUBLIC_DIR = ROOT;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT, "data"));
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || (process.env.DATA_DIR ? path.join(DATA_DIR, "uploads") : path.join(ROOT, "uploads")));
 const META_PATH = path.join(DATA_DIR, "meta.json");
-const PREVIEW_DIR = path.join(DATA_DIR, "previews");
 const TEAM_PASSWORD = String(process.env.TEAM_PASSWORD || process.env.ACCESS_PASSWORD || "");
 const AUTH_SECRET = process.env.SESSION_SECRET || TEAM_PASSWORD || "daon-local";
 
@@ -171,8 +168,6 @@ app.use((req, res, next) => {
     p.startsWith("/uploads") ||
     p === "/server.js" ||
     p === "/store.js" ||
-    p === "/preview.js" ||
-    p === "/convert.js" ||
     p.startsWith("/scripts") ||
     p.startsWith("/package") ||
     p.endsWith(".bat") ||
@@ -455,11 +450,10 @@ app.get("/api/files", (req, res) => {
     res.status(400).json({ error: "메뉴를 찾을 수 없습니다." });
     return;
   }
-  const files = [];
-  for (let i = meta.files.length - 1; i >= 0; i--) {
-    const f = meta.files[i];
-    if (f.menuId === menuId) files.push(publicFile(f));
-  }
+  const files = meta.files
+    .filter((f) => f.menuId === menuId)
+    .sort((a, b) => String(b.uploadedAt || "").localeCompare(String(a.uploadedAt || "")))
+    .map(publicFile);
   res.setHeader("Cache-Control", "no-store");
   res.json({ files });
 });
@@ -514,46 +508,6 @@ app.post("/api/upload", (req, res) => {
   });
 });
 
-function sendPdf(res, buf) {
-  res.setHeader("Cache-Control", "private, max-age=120");
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "inline");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(buf);
-}
-
-app.get("/api/preview/:id", async (req, res) => {
-  const row = findFile(String(req.params.id || ""));
-  if (!row) {
-    res.status(404).json({ error: "파일을 찾을 수 없습니다." });
-    return;
-  }
-  const kind = previewKind(row.ext);
-  try {
-    if (kind === "office" || isOfficeExt(row.ext)) {
-      const pdfPath = await ensurePdf(PREVIEW_DIR, row, (stored) => store.readFile(stored));
-      sendPdf(res, fs.readFileSync(pdfPath));
-      return;
-    }
-    if (kind !== "pdf" && kind !== "text") {
-      res.status(400).json({ error: "이 파일은 바로 미리볼 수 없습니다." });
-      return;
-    }
-    const buf = await store.readFile(row.stored);
-    if (!buf) {
-      res.status(404).json({ error: "파일이 디스크에 없습니다." });
-      return;
-    }
-    res.setHeader("Cache-Control", "private, max-age=120");
-    res.setHeader("Content-Type", previewMime(row.ext));
-    res.setHeader("Content-Disposition", "inline");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(buf);
-  } catch (err) {
-    res.status(500).json({ error: (err && err.message) || "원래 양식 미리보기를 만들지 못했습니다." });
-  }
-});
-
 app.get("/api/download/:id", async (req, res) => {
   const row = findFile(String(req.params.id || ""));
   if (!row) {
@@ -578,7 +532,6 @@ app.delete("/api/files/:id", async (req, res) => {
   const [row] = meta.files.splice(idx, 1);
   try {
     await store.deleteFile(row.stored);
-    removePdf(PREVIEW_DIR, row);
     await saveMeta(meta);
   } catch (_) {
     meta.files.splice(idx, 0, row);
@@ -671,7 +624,6 @@ async function start() {
     console.error(err && err.message ? err.message : err);
     process.exit(1);
   }
-  fs.mkdirSync(PREVIEW_DIR, { recursive: true });
   if (IS_PROD && store.kind === "local" && !process.env.DATA_DIR) {
     console.log("  경고: 재시작하면 올린 파일이 사라집니다. GITHUB_TOKEN 과 GITHUB_REPO 를 설정하세요.");
   }

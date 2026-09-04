@@ -9,13 +9,6 @@
   const filesTitle = $("files-title");
   const filesMeta = $("files-meta");
   const filesWrap = $("files-wrap");
-  const preview = $("preview");
-  const previewName = $("preview-name");
-  const previewNav = $("preview-nav");
-  const previewPage = $("preview-page");
-  const previewBody = $("preview-body");
-  const previewPrev = $("preview-prev");
-  const previewNext = $("preview-next");
   const paneSheet = $("pane-sheet");
   const sheetEl = $("sheet");
   const sheetScroll = $("sheet-scroll");
@@ -23,6 +16,8 @@
   const sheetAddr = $("sheet-addr");
   const sheetTitle = $("sheet-title");
   const sheetFiles = $("sheet-files");
+  const statusRows = $("status-rows");
+  const statusSum = $("status-sum");
   const drop = $("drop");
   const fileInput = $("file-input");
   const modal = $("modal");
@@ -81,13 +76,6 @@
   let shownFiles = [];
   let toastTimer = 0;
   let uploading = false;
-  let selectedId = "";
-  let slideIndex = 0;
-  let currentSlides = [];
-  let previewToken = 0;
-  let previewUrl = "";
-  const slideCache = new Map();
-  const OFFICE = new Set(["ppt", "pptx", "pot", "potx", "pps", "ppsx", "hwp", "hwpx", "hwt"]);
 
   const extOf = (name) => {
     const i = name.lastIndexOf(".");
@@ -109,11 +97,22 @@
   const formatMenuWhen = (iso) => {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
-    const now = new Date();
-    if (d.getFullYear() !== now.getFullYear()) {
-      return `${String(d.getFullYear()).slice(2)}. ${d.getMonth() + 1}. ${d.getDate()}.`;
-    }
-    return `${d.getMonth() + 1}. ${d.getDate()}.`;
+    const h = d.getHours();
+    const ap = h < 12 ? "오전" : "오후";
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `(${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}. ${ap} ${hour12}시 ${d.getMinutes()}분)`;
+  };
+
+  const newestFirst = (files) => files.slice().sort((a, b) => String(b.uploadedAt || "").localeCompare(String(a.uploadedAt || "")));
+  const STATUS_SKIP = new Set(["memo", "merged", "refs"]);
+  const formatStatusWhen = (iso) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "아직 없음";
+    const h = d.getHours();
+    const ap = h < 12 ? "오전" : "오후";
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}. ${ap} ${hour12}시 ${min}분`;
   };
 
   const applyStats = (data) => {
@@ -599,7 +598,38 @@
     if (!isSheet) Sheet.blur();
   };
 
+  const renderStatus = () => {
+    if (!statusRows || !statusSum) return;
+    const rows = menus.filter((m) => !STATUS_SKIP.has(m.id));
+    const nums = rows.map((m) => counts[m.id] || 0);
+    const max = Math.max(1, ...nums);
+    const done = nums.filter((n) => n > 0).length;
+    const total = nums.reduce((a, b) => a + b, 0);
+    statusSum.textContent = `${rows.length}명 중 ${done}명 제출 · 파일 ${total}개`;
+    const frag = document.createDocumentFragment();
+    for (const m of rows) {
+      const n = counts[m.id] || 0;
+      const when = n ? formatStatusWhen(latest[m.id]) : "아직 없음";
+      const pct = n ? Math.max(10, Math.round((n / max) * 100)) : 0;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "status-row" + (n ? " is-on" : "");
+      btn.dataset.menu = m.id;
+      btn.title = `${m.label} · ${n}개 · ${when}`;
+      btn.innerHTML =
+        `<span class="status-name"><i class="status-dot" aria-hidden="true"></i><span class="status-label"></span></span>` +
+        `<span class="status-bar" aria-hidden="true"><i style="width:${pct}%"></i></span>` +
+        `<span class="status-n">${n}개</span>` +
+        `<span class="status-when"></span>`;
+      btn.querySelector(".status-label").textContent = m.label;
+      btn.querySelector(".status-when").textContent = when;
+      frag.appendChild(btn);
+    }
+    statusRows.replaceChildren(frag);
+  };
+
   const renderMenus = () => {
+    renderStatus();
     const frag = document.createDocumentFragment();
     for (const m of menus) {
       const btn = document.createElement("button");
@@ -616,7 +646,7 @@
       const dateEl = btn.querySelector(".menu-date");
       if (dateEl) dateEl.textContent = when;
       btn.title = when
-        ? `최근 파일 ${formatWhen(latest[m.id])} · 더블클릭하면 제목을 바꿀 수 있습니다`
+        ? `최근 파일 ${when} · 더블클릭하면 제목을 바꿀 수 있습니다`
         : "더블클릭하면 제목을 바꿀 수 있습니다";
       frag.appendChild(btn);
     }
@@ -629,6 +659,7 @@
   };
 
   const renderSheetFiles = (files) => {
+    files = newestFirst(files);
     if (!files.length) {
       sheetFiles.replaceChildren();
       return;
@@ -648,139 +679,8 @@
     sheetFiles.replaceChildren(frag);
   };
 
-  const paintSelected = () => {
-    for (const row of filesWrap.querySelectorAll("[data-file]")) {
-      row.classList.toggle("is-sel", row.dataset.file === selectedId);
-    }
-  };
-
-  const setPreviewEmpty = (msg) => {
-    previewNav.classList.add("is-hidden");
-    previewName.textContent = "파일을 누르면 아래에서 미리봅니다";
-    previewBody.innerHTML = `<div class="preview-empty">${msg}</div>`;
-  };
-
-  const showFallback = (file, msg) => {
-    previewNav.classList.add("is-hidden");
-    previewName.textContent = file.name;
-    previewBody.innerHTML = `<div class="preview-fallback">${msg}<br />오른쪽 내려받기로 열어 주세요.</div>`;
-  };
-
-  const renderSlide = () => {
-    const slide = currentSlides[slideIndex] || { texts: [], images: [] };
-    const texts = slide.texts || [];
-    const images = slide.images || [];
-    const title = texts[0] || "";
-    const rest = texts.slice(1);
-    previewPage.textContent = `${slideIndex + 1} / ${currentSlides.length || 1}`;
-    previewBody.innerHTML =
-      `<div class="preview-stage">` +
-      `<button type="button" class="preview-arrow prev" id="preview-arrow-prev" aria-label="이전">‹</button>` +
-      `<article class="preview-slide"></article>` +
-      `<button type="button" class="preview-arrow next" id="preview-arrow-next" aria-label="다음">›</button>` +
-      `</div>`;
-    const card = previewBody.querySelector(".preview-slide");
-    if (title) {
-      const h = document.createElement("h3");
-      h.textContent = title;
-      card.appendChild(h);
-    }
-    for (const src of images) {
-      const img = document.createElement("img");
-      img.src = src;
-      img.alt = "";
-      card.appendChild(img);
-    }
-    for (const line of rest) {
-      const p = document.createElement("p");
-      p.textContent = line;
-      card.appendChild(p);
-    }
-    if (!title && !rest.length && !images.length) {
-      const p = document.createElement("p");
-      p.textContent = "이 슬라이드에서 글을 찾지 못했습니다.";
-      card.appendChild(p);
-    }
-  };
-
-  const moveSlide = (delta) => {
-    if (!currentSlides.length) return;
-    slideIndex = (slideIndex + delta + currentSlides.length) % currentSlides.length;
-    renderSlide();
-  };
-
-  const showPdfFrame = (url) => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = url;
-    previewBody.innerHTML = `<iframe class="preview-frame" src="${url}#toolbar=1" title="미리보기"></iframe>`;
-  };
-
-  const openOfficePreview = async (file, alive) => {
-    previewBody.innerHTML = `<div class="preview-empty">원래 양식으로 변환하는 중…<br />처음 한 번은 조금 걸릴 수 있습니다.</div>`;
-    const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
-    if (!res.ok) {
-      let data = {};
-      try { data = await res.json(); } catch (_) {}
-      throw new Error(data.error || "원래 양식 미리보기를 만들지 못했습니다.");
-    }
-    const blob = await res.blob();
-    if (!alive()) return;
-    showPdfFrame(URL.createObjectURL(blob));
-  };
-
-  const openPreview = async (file) => {
-    const token = ++previewToken;
-    if (!file) {
-      setPreviewEmpty("파일을 누르면 이 칸에서 넓게 미리봅니다");
-      return;
-    }
-    selectedId = file.id;
-    paintSelected();
-    previewName.textContent = file.name;
-    previewNav.classList.add("is-hidden");
-    currentSlides = [];
-    slideIndex = 0;
-    const ext = file.ext;
-    const alive = () => token === previewToken;
-    if (ext === "pdf") {
-      previewBody.innerHTML = `<div class="preview-empty">불러오는 중…</div>`;
-      try {
-        const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
-        if (!res.ok) throw new Error();
-        const blob = await res.blob();
-        if (!alive()) return;
-        showPdfFrame(URL.createObjectURL(blob));
-      } catch (_) {
-        if (alive()) showFallback(file, "미리보기를 불러오지 못했습니다.");
-      }
-      return;
-    }
-    if (ext === "txt" || ext === "text") {
-      previewBody.innerHTML = `<div class="preview-empty">불러오는 중…</div>`;
-      try {
-        const res = await fetch("api/preview/" + encodeURIComponent(file.id), { cache: "no-store" });
-        if (!res.ok) throw new Error();
-        const text = await res.text();
-        if (!alive()) return;
-        previewBody.innerHTML = `<pre class="preview-text"></pre>`;
-        previewBody.querySelector("pre").textContent = text;
-      } catch (_) {
-        if (alive()) showFallback(file, "텍스트를 불러오지 못했습니다.");
-      }
-      return;
-    }
-    if (OFFICE.has(ext)) {
-      try {
-        await openOfficePreview(file, alive);
-      } catch (e) {
-        if (alive()) showFallback(file, e.message || "원래 양식 미리보기를 만들지 못했습니다.");
-      }
-      return;
-    }
-    showFallback(file, "이 형식은 브라우저 미리보기를 지원하지 않습니다.");
-  };
-
   const renderFiles = (menuId, files) => {
+    files = newestFirst(files);
     shownFiles = files;
     const menu = menus.find((m) => m.id === menuId);
     if (menuId === "memo") {
@@ -792,13 +692,11 @@
     const visible = q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
     filesTitle.textContent = menu ? menu.label : "";
     filesMeta.textContent = files.length
-      ? `${files.length}개 파일 · 클릭하면 아래에서 미리봅니다`
+      ? `${files.length}개 파일 · 누구나 내려받을 수 있습니다`
       : "아직 올라온 파일이 없습니다";
 
     if (!visible.length) {
       filesWrap.innerHTML = `<div class="empty">${files.length ? "찾는 파일이 없습니다." : "이 메뉴에는 첨부파일이 없습니다.<br />왼쪽에서 업로드를 눌러 파일을 올려 주세요."}</div>`;
-      selectedId = "";
-      setPreviewEmpty(files.length ? "찾는 파일이 없습니다." : "이 메뉴에는 아직 파일이 없습니다");
       return;
     }
 
@@ -806,7 +704,6 @@
     for (const f of visible) {
       const row = document.createElement("article");
       row.className = "file-row";
-      row.dataset.file = f.id;
       row.innerHTML =
         fileBadge(f.ext) +
         `<div><div class="file-name"></div><div class="file-sub">${formatSize(f.size)}</div></div>` +
@@ -817,8 +714,6 @@
       frag.appendChild(row);
     }
     filesWrap.replaceChildren(frag);
-    const keep = visible.find((f) => f.id === selectedId) || visible[0];
-    openPreview(keep);
   };
 
   const loadFiles = async (menuId, force) => {
@@ -935,10 +830,8 @@
       const data = await postUpload(menuId, files);
       applyStats(data);
       cache.delete(menuId);
-      for (const f of data.files || []) slideCache.delete(f.id);
       renderMenus();
       toast(`${files.length}개 파일을 올렸습니다`);
-      if (data.files && data.files[0]) selectedId = data.files[0].id;
       await openMenu(menuId, true);
     } catch (e) {
       toast(e.message);
@@ -964,8 +857,6 @@
       if (!res.ok) throw new Error(data.error || "삭제 실패");
       applyStats(data);
       cache.delete(view);
-      slideCache.delete(id);
-      if (selectedId === id) selectedId = "";
       renderMenus();
       await openMenu(view, true);
       toast("삭제했습니다");
@@ -1035,6 +926,13 @@
     input.addEventListener("blur", () => finish(!cancelled));
   };
 
+  if (statusRows) {
+    statusRows.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-menu]");
+      if (btn) openMenu(btn.dataset.menu);
+    });
+  }
+
   menuList.addEventListener("click", (e) => {
     if (e.target.closest(".menu-edit")) return;
     const btn = e.target.closest("[data-menu]");
@@ -1053,24 +951,8 @@
     const btn = e.target.closest("[data-del]");
     if (btn) deleteFile(btn.dataset.del);
   };
-  filesWrap.addEventListener("click", (e) => {
-    if (e.target.closest("[data-del]")) {
-      onFileDel(e);
-      return;
-    }
-    if (e.target.closest(".btn-dl")) return;
-    const row = e.target.closest("[data-file]");
-    if (!row) return;
-    const file = shownFiles.find((f) => f.id === row.dataset.file);
-    if (file) openPreview(file);
-  });
+  filesWrap.addEventListener("click", onFileDel);
   sheetFiles.addEventListener("click", onFileDel);
-  previewBody.addEventListener("click", (e) => {
-    if (e.target.closest("#preview-arrow-prev")) moveSlide(-1);
-    if (e.target.closest("#preview-arrow-next")) moveSlide(1);
-  });
-  previewPrev.addEventListener("click", () => moveSlide(-1));
-  previewNext.addEventListener("click", () => moveSlide(1));
 
   if ($("sched-add")) $("sched-add").addEventListener("click", () => openSched(null));
   if (schedPop) {
@@ -1160,10 +1042,6 @@
         return;
       }
       closeModal();
-    }
-    if (view !== "memo" && view !== "upload" && currentSlides.length && modal.classList.contains("is-hidden")) {
-      if (e.key === "ArrowLeft") { e.preventDefault(); moveSlide(-1); return; }
-      if (e.key === "ArrowRight") { e.preventDefault(); moveSlide(1); return; }
     }
     if (view !== "memo" || modal.classList.contains("is-hidden") === false) return;
     if (e.target.closest(".menu-edit") || e.target === search) return;
